@@ -109,8 +109,15 @@ INFO = {
     ]),
     "titulo": ("🏷️ Palavras no título da aba", [
         ("Como funciona",
-         "O app lê o nome da aba ativa do navegador (o texto que aparece na aba). Se "
-         "tiver uma palavra proibida, como o nome de um site adulto, a tela é coberta."),
+         "O app lê o nome da aba ativa de cada janela do navegador (o texto que aparece "
+         "na aba). Se tiver uma palavra proibida, as imagens daquela janela passam a ser "
+         "cobertas com muito menos (fotos \"quase\", de biquíni, sugestivas)."),
+        ("Só palavra não cobre",
+         "Uma página só com texto nunca é coberta: precisa ter imagem. Imagem explícita "
+         "é coberta sempre, com ou sem palavra."),
+        ("Palavra inteira",
+         "Só conta a palavra inteira (ou no plural): um erro de digitação como "
+         "\"pornomes\" não bloqueia."),
         ("Para não te prender",
          "A faixa das abas e o botão X ficam livres, para você fechar a aba."),
         ("Onde vale",
@@ -120,11 +127,54 @@ INFO = {
     "ocr": ("📝 Texto na página", [
         ("Como funciona",
          "A cada 2 segundos o leitor de texto do próprio Windows lê o que está escrito "
-         "na janela do navegador. Se aparecer uma palavra proibida na página, a tela é "
-         "coberta até você mudar de página."),
+         "na janela do navegador ativa. Se aparecer uma palavra proibida, as imagens "
+         "daquela página passam a ser cobertas com muito menos, até você mudar de página. "
+         "O texto sozinho não cobre nada."),
         ("Onde vale",
          "Só dentro da janela do navegador. Editores de texto, terminal e o próprio "
          "log do app são ignorados."),
+    ]),
+    "rapido": ("⚡ Bloqueio rápido", [
+        ("Para quê",
+         "Para a hora em que bate a vontade: um clique e pronto, sem perguntas. Liga o "
+         "Modo restrito por 30 minutos e todas as proteções (imagens, título e texto)."),
+        ("O que trava",
+         "Até acabar não dá para pausar, desligar nem baixar a sensibilidade. Os arquivos "
+         "do app ficam \"em uso\": o Windows não deixa apagar a pasta."),
+        ("Sem abrir o painel", "Atalho: Ctrl + Alt + Shift + B."),
+    ]),
+    "previas": ("🪟 Esconder prévias", [
+        ("Por quê",
+         "A miniatura que aparece ao passar o mouse no ícone do Chrome na barra de "
+         "tarefas, as do Alt+Tab e o \"Espiar\" (passar o mouse no nome da janela e ela "
+         "aparecer inteira) são desenhados pelo Windows acima de qualquer programa: o "
+         "mosaico não consegue cobrir."),
+        ("O que muda",
+         "A miniatura da barra não aparece mais (só a lista com os nomes), o \"Espiar\" "
+         "desliga e o Alt+Tab fica no estilo clássico, só com os ícones. Ao ligar ou "
+         "desligar, a barra de tarefas pisca (o Windows "
+         "reinicia o Explorer) e as pastas abertas fecham."),
+    ]),
+    "shorts": ("📵 Vídeos curtos", [
+        ("O que faz",
+         "Remove os vídeos curtos da página (não cobre com mosaico): os Shorts do "
+         "YouTube, os Reels do Instagram e o feed \"Para Você\" do TikTok. No YouTube, "
+         "abrir um Short vira um vídeo normal; no Instagram, a página de Reels volta "
+         "para a home."),
+        ("Precisa instalar a extensão",
+         "Isso só uma extensão de navegador consegue fazer. Clique em \"Instalar\", siga "
+         "os 3 passos (uma vez só) e pronto; o liga/desliga continua sendo aqui no "
+         "Painel. Funciona no Chrome, Edge e Brave."),
+        ("Onde não vale",
+         "Em outros navegadores (Firefox, Opera) a extensão não é instalada. O resto do "
+         "app continua funcionando normalmente neles."),
+    ]),
+    "lembrete": ("⏰ Lembrete de pausa", [
+        ("Como funciona",
+         "Depois do tempo escolhido usando o PC sem parar, aparece um aviso no canto da "
+         "tela para você dar uma pausa."),
+        ("O que conta como pausa",
+         "Ficar 5 minutos sem mexer no mouse nem no teclado zera a contagem."),
     ]),
     "restrito": ("🔒 Modo restrito", [
         ("Como funciona",
@@ -172,8 +222,9 @@ class Painel(ctk.CTk):
         self._cartao_travas()
         self._cartao_bloquear()
         self._cartao_cobrir()
+        self._cartao_bem_estar()
         self._cartao_sistema()
-        ctk.CTkLabel(self.corpo, text="Atalho para pausar: Ctrl + Alt + Shift + Q",
+        ctk.CTkLabel(self.corpo, text="Pausar: Ctrl + Alt + Shift + Q · Bloqueio rápido: Ctrl + Alt + Shift + B",
                      font=fonte(11), text_color=TEXTO2).pack(pady=(4, 12))
 
         self._status()
@@ -219,6 +270,13 @@ class Painel(ctk.CTk):
     def _cartao_travas(self):
         c = self._cartao("Travas", "Para não conseguir desligar num momento de fraqueza.")
         f = ctk.CTkFrame(c, fg_color="transparent")
+        f.pack(fill="x", padx=16, pady=(10, 2))
+        self.bt_rapido = ctk.CTkButton(f, text="⚡  Bloqueio rápido", height=44, corner_radius=12,
+                                       fg_color=VERMELHO, hover_color=("#B91C1C", "#DC2626"),
+                                       font=fonte(15, "bold"), command=self.bloqueio_rapido)
+        self.bt_rapido.pack(side="left", fill="x", expand=True)
+        self._bt_info(f, "rapido").pack(side="right", padx=(8, 0))
+        f = ctk.CTkFrame(c, fg_color="transparent")
         f.pack(fill="x", padx=12, pady=(8, 5))
         emoji(f, "🔒").pack(side="left")
         t = ctk.CTkFrame(f, fg_color="transparent")
@@ -250,10 +308,19 @@ class Painel(ctk.CTk):
         self.bt_lista.pack(side="right", padx=(0, 6))
         self._linha(c, "🔎", "Busca segura", "Resultados explícitos somem do Google, Bing e DuckDuckGo",
                     "safesearch", cfg["forcar_safesearch"], self._alternar)
-        self._linha(c, "🏷️", "Palavras no título da aba", "Aba com nome proibido cobre a tela",
+        self._linha(c, "🏷️", "Palavras no título da aba", "Aba com nome proibido: imagens cobertas com menos",
                     "titulo", cfg["titulo_ativo"], self._alternar)
-        self._linha(c, "📝", "Texto na página", "Palavra proibida escrita na página cobre a tela",
+        self._linha(c, "📝", "Texto na página", "Palavra na página: imagens cobertas com menos",
                     "ocr", cfg["ocr"]["ativo"], self._alternar)
+        self._linha(c, "🪟", "Esconder prévias", "Sem miniatura das janelas na barra e no Alt+Tab",
+                    "previas", cfg["esconder_previas"], self._alternar)
+        linha = self._linha(c, "📵", "Vídeos curtos", "Remove Shorts, Reels e o feed do TikTok da página",
+                            "shorts", cfg["bloquear_shorts"], self._alternar)
+        self.bt_extensao = ctk.CTkButton(linha, text="Instalar", width=90, height=26,
+                                         fg_color="transparent", border_width=1, border_color=BORDA,
+                                         text_color=ACENTO, hover_color=BORDA, font=fonte(11),
+                                         command=self.instalar_extensao)
+        self.bt_extensao.pack(side="right", padx=(0, 6))
         ctk.CTkFrame(c, fg_color="transparent", height=6).pack()
 
     def _cartao_cobrir(self):
@@ -293,6 +360,24 @@ class Painel(ctk.CTk):
         for chave, v in valores.items():
             self.sliders[chave][0].set(v)
             self._rotulo(chave, v)
+
+    def _cartao_bem_estar(self):
+        c = self._cartao("Bem-estar")
+        lp = self.cfg["lembrete_pausa"]
+        linha = self._linha(c, "⏰", "Lembrete de pausa", "Avisa quando é hora de levantar um pouco",
+                            "lembrete", lp["ativo"], self._alternar)
+        self.seg_lembrete = ctk.CTkSegmentedButton(
+            c, values=["25 min", "45 min", "60 min", "90 min"], font=fonte(12), height=30,
+            selected_color=ACENTO, selected_hover_color=ACENTO_HOVER, command=self._mudar_lembrete)
+        self.seg_lembrete.set(f"{lp['minutos']} min")
+        self.seg_lembrete.pack(fill="x", padx=16, pady=(2, 14))
+
+    def _mudar_lembrete(self, valor):
+        cfg = config.carregar()
+        cfg["lembrete_pausa"]["minutos"] = int(valor.split()[0])
+        config.salvar(cfg)
+        self.cfg = cfg
+        self.avisar("Aplicado ✓", VERDE)
 
     def _cartao_sistema(self):
         c = self._cartao("Sistema")
@@ -378,7 +463,7 @@ class Painel(ctk.CTk):
     def _alternar(self, chave):
         var = self.vars[chave]
         novo = var.get()
-        if protecao.restrito_ativo() and not novo:
+        if protecao.restrito_ativo() and not novo and chave != "lembrete":
             var.set(True)
             self.avisar("🔒 Modo restrito: só dá para ligar proteções.", LARANJA)
             return
@@ -388,6 +473,23 @@ class Painel(ctk.CTk):
             self._salvar_cfg(titulo_ativo=novo)
         elif chave == "ocr":
             self._salvar_cfg(ocr_ativo=novo)
+        elif chave == "previas":
+            self._salvar_cfg(esconder_previas=novo)
+            self.avisar("Reiniciando a barra de tarefas…", ACENTO)
+            threading.Thread(target=protecao.esconder_previas, args=(novo,), daemon=True).start()
+            return
+        elif chave == "shorts":
+            self._salvar_cfg(bloquear_shorts=novo)
+            if novo and not protecao.host_curtos_registrado():
+                self.avisar("Ligado. Falta instalar a extensão: clique em \"Instalar\".", LARANJA, 10)
+            else:
+                self.avisar("Aplicado ✓ (recarregue a aba do YouTube/Instagram/TikTok)", VERDE, 8)
+            return
+        elif chave == "lembrete":
+            cfg = config.carregar()
+            cfg["lembrete_pausa"]["ativo"] = novo
+            config.salvar(cfg)
+            self.cfg = cfg
         elif chave in ("sites", "safesearch"):
             nome = "bloquear_sites" if chave == "sites" else "forcar_safesearch"
             antigo = not novo
@@ -492,12 +594,48 @@ class Painel(ctk.CTk):
             protecao.iniciar_guardiao()
         self.avisar("🔒 Modo restrito até " + time.strftime("%d/%m %H:%M", time.localtime(ate)), ACENTO)
 
+    def bloqueio_rapido(self):
+        ate = protecao.bloqueio_rapido()
+        self._ativar_restrito(0)  # garante app, guardião e início com o Windows
+        self.cfg = config.carregar()
+        for chave in ("imagens", "titulo", "ocr"):
+            self.vars[chave].set(True)
+        self.avisar("⚡ Travado até " + time.strftime("%H:%M", time.localtime(ate)) +
+                    ". Respira: isso passa.", VERMELHO, 15)
+
     def editar_sites(self):
         if protecao.restrito_ativo():
             self.avisar("🔒 Modo restrito: a lista não pode ser editada agora.", LARANJA)
             return
         self._abrir(config.caminho(self.cfg["sites_bloqueados"]))
         self.avisar("Salve o arquivo e desligue/ligue \"Sites adultos\" para aplicar.", ACENTO, 10)
+
+    def instalar_extensao(self):
+        try:
+            protecao.registrar_host_curtos()
+        except Exception as e:
+            self.avisar(f"Não consegui preparar a extensão: {e}", VERMELHO, 10)
+            return
+        protecao.PASTA_EXTENSAO and self._abrir(protecao.PASTA_EXTENSAO)
+        self._escolher(
+            "Instalar a extensão (uma vez)",
+            "Abri a pasta da extensão. No navegador (Chrome, Edge ou Brave):\n\n"
+            "1. Abra  chrome://extensions  (ou edge://extensions).\n"
+            "2. Ligue o \"Modo do desenvolvedor\" (canto superior direito).\n"
+            "3. Clique em \"Carregar sem compactação\" e escolha a pasta\n"
+            "    \"extensao\" que acabei de abrir.\n\n"
+            "Depois é só manter o interruptor \"Vídeos curtos\" ligado aqui.",
+            [("Abrir chrome://extensions", "chrome"), ("Já instalei", "ok")],
+            self._pos_instalar)
+
+    def _pos_instalar(self, qual):
+        if qual == "chrome":
+            try:
+                os.startfile("chrome://extensions")
+            except OSError:
+                self.avisar("Abra chrome://extensions no seu navegador.", ACENTO, 8)
+        else:
+            self.avisar("Pronto ✓ Recarregue a aba do YouTube/Instagram/TikTok.", VERDE, 8)
 
     def desligar_tudo(self):
         if protecao.restrito_ativo():
@@ -540,6 +678,9 @@ class Painel(ctk.CTk):
         padrao = copy.deepcopy(config.PADRAO)
         atual = config.carregar()
         padrao["sites_bloqueados"] = atual["sites_bloqueados"]  # mantém a lista
+        padrao["lembrete_pausa"] = atual["lembrete_pausa"]
+        padrao["esconder_previas"] = atual["esconder_previas"]  # mexe na barra: não reseta
+        padrao["bloquear_shorts"] = atual["bloquear_shorts"]
         config.salvar(padrao)
         self.cfg = padrao
         self.vars["imagens"].set("nudez" in padrao["detectores"])
