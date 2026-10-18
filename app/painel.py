@@ -3,6 +3,7 @@
 Tudo se aplica na hora (sem botão salvar). Modo restrito: até o horário
 escolhido não dá para pausar nem desligar nada, só deixar mais rígido.
 """
+import copy
 import ctypes
 import json
 import os
@@ -69,6 +70,84 @@ def falta(ate):
     return f"{h}h {m:02d}min" if h else f"{m} min"
 
 
+# textos do botão "?" de cada função: (título, [(subtítulo, texto), ...])
+INFO = {
+    "imagens": ("🖼️ Imagens e vídeos", [
+        ("Como funciona",
+         "Várias vezes por segundo o app tira uma \"foto\" da tela (só na memória: nunca "
+         "salva nem envia). Dois modelos de IA olham essa foto: um procura partes do corpo "
+         "(seios, nádegas, genitália) e outro dá uma nota de \"conteúdo adulto\" para cada "
+         "imagem ou vídeo."),
+        ("Quando bloqueia",
+         "As notas são somadas. Se passar do limite da Sensibilidade, aquela imagem é "
+         "coberta com mosaico (ou a tela toda, se você escolheu \"Tela inteira\"). "
+         "Homens sem camisa, como lutadores, não bloqueiam sozinhos: precisa de um "
+         "sinal de corpo feminino ou de genitália."),
+        ("Onde vale",
+         "Em qualquer programa: navegador, Discord, visualizador de fotos, vídeos. "
+         "Usa a placa de vídeo se tiver; senão, o processador."),
+    ]),
+    "sites": ("🌐 Sites adultos", [
+        ("Como funciona",
+         "Usa o arquivo \"hosts\" do Windows, uma lista que o PC consulta antes de ir "
+         "para a internet. Os sites da lista são apontados para lugar nenhum, então "
+         "nem chegam a carregar."),
+        ("Onde vale",
+         "Em todos os navegadores, inclusive aba anônima. A lista fica em "
+         "dados/sites_bloqueados.txt (botão \"Editar lista\"); depois de editar, "
+         "desligue e ligue esta opção para aplicar."),
+        ("Permissão", "Ligar ou desligar pede a permissão de administrador do Windows."),
+    ]),
+    "safesearch": ("🔎 Busca segura", [
+        ("Como funciona",
+         "Pelo mesmo arquivo \"hosts\", o Google, o Bing e o DuckDuckGo passam a abrir "
+         "sempre na versão com SafeSearch travado."),
+        ("Na prática",
+         "Imagens e links explícitos somem dos resultados, inclusive do Google Imagens, "
+         "mesmo que alguém tente desligar o SafeSearch nas configurações do site."),
+        ("Permissão", "Ligar ou desligar pede a permissão de administrador do Windows."),
+    ]),
+    "titulo": ("🏷️ Palavras no título da aba", [
+        ("Como funciona",
+         "O app lê o nome da aba ativa do navegador (o texto que aparece na aba). Se "
+         "tiver uma palavra proibida, como o nome de um site adulto, a tela é coberta."),
+        ("Para não te prender",
+         "A faixa das abas e o botão X ficam livres, para você fechar a aba."),
+        ("Onde vale",
+         "Só no navegador. Uma mensagem com a palavra no WhatsApp ou no Discord "
+         "(aplicativos) não bloqueia."),
+    ]),
+    "ocr": ("📝 Texto na página", [
+        ("Como funciona",
+         "A cada 2 segundos o leitor de texto do próprio Windows lê o que está escrito "
+         "na janela do navegador. Se aparecer uma palavra proibida na página, a tela é "
+         "coberta até você mudar de página."),
+        ("Onde vale",
+         "Só dentro da janela do navegador. Editores de texto, terminal e o próprio "
+         "log do app são ignorados."),
+    ]),
+    "restrito": ("🔒 Modo restrito", [
+        ("Como funciona",
+         "Você escolhe por quanto tempo (1 hora a 1 semana). Até acabar não dá para "
+         "pausar, desligar proteções, baixar a sensibilidade, editar a lista de sites "
+         "nem desligar o app, nem pelo painel nem pelo atalho de teclado."),
+        ("O que ainda dá",
+         "Deixar mais rígido: ligar proteções, aumentar a sensibilidade ou estender o tempo."),
+        ("Atenção", "Não tem como cancelar antes. Comece com 1 hora para conhecer."),
+    ]),
+    "forte": ("🛡️ Proteção forte", [
+        ("Como funciona",
+         "Cria uma tarefa no Agendador do Windows que, a cada minuto, confere se o "
+         "bloqueador está aberto e o reabre se não estiver."),
+        ("Por que usar",
+         "Sem ela, se alguém fechar o app e o processo vigia pelo Gerenciador de "
+         "Tarefas, ele só volta no próximo login. Com ela, volta em até 1 minuto. "
+         "Combina bem com o Modo restrito."),
+        ("Permissão", "Ligar ou desligar pede a permissão de administrador do Windows."),
+    ]),
+}
+
+
 class Painel(ctk.CTk):
     def __init__(self):
         super().__init__(fg_color=FUNDO)
@@ -90,7 +169,7 @@ class Painel(ctk.CTk):
 
         self._cabecalho()
         self._cartao_status()
-        self._cartao_restrito()
+        self._cartao_travas()
         self._cartao_bloquear()
         self._cartao_cobrir()
         self._cartao_sistema()
@@ -121,13 +200,120 @@ class Painel(ctk.CTk):
         txt.pack(side="left", fill="x", expand=True, padx=(4, 8))
         ctk.CTkLabel(txt, text=titulo, font=fonte(13, "bold"), anchor="w").pack(fill="x")
         ctk.CTkLabel(txt, text=sub, font=fonte(11), text_color=TEXTO2, anchor="w",
-                     justify="left", wraplength=320).pack(fill="x")
+                     justify="left", wraplength=300).pack(fill="x")
         var = ctk.BooleanVar(value=valor)
         sw = ctk.CTkSwitch(f, text="", variable=var, width=46, progress_color=ACENTO,
                            command=lambda: comando(chave))
         sw.pack(side="right")
+        if chave in INFO:
+            self._bt_info(f, chave).pack(side="right", padx=(0, 6))
         self.vars[chave], self.switches[chave] = var, sw
         return f
+
+    def _bt_info(self, pai, chave):
+        return ctk.CTkButton(pai, text="?", width=26, height=26, corner_radius=13,
+                             fg_color="transparent", border_width=1, border_color=BORDA,
+                             text_color=TEXTO2, hover_color=BORDA, font=fonte(12, "bold"),
+                             command=lambda: self.explicar(chave))
+
+    def _cartao_travas(self):
+        c = self._cartao("Travas", "Para não conseguir desligar num momento de fraqueza.")
+        f = ctk.CTkFrame(c, fg_color="transparent")
+        f.pack(fill="x", padx=12, pady=(8, 5))
+        emoji(f, "🔒").pack(side="left")
+        t = ctk.CTkFrame(f, fg_color="transparent")
+        t.pack(side="left", fill="x", expand=True, padx=(4, 8))
+        ctk.CTkLabel(t, text="Modo restrito", font=fonte(13, "bold"), anchor="w").pack(fill="x")
+        self.lb_restrito = ctk.CTkLabel(t, text="", font=fonte(11), text_color=TEXTO2,
+                                        anchor="w", justify="left", wraplength=260)
+        self.lb_restrito.pack(fill="x")
+        self.bt_restrito = ctk.CTkButton(f, text="Ativar", width=84, height=32, corner_radius=10,
+                                         fg_color=ACENTO, hover_color=ACENTO_HOVER,
+                                         font=fonte(12, "bold"), command=self.restrito)
+        self.bt_restrito.pack(side="right")
+        self._bt_info(f, "restrito").pack(side="right", padx=(0, 6))
+        self._linha(c, "🛡️", "Proteção forte", "O Windows reabre o app em até 1 min se fecharem",
+                    "forte", protecao.tarefa_existe(), self._alternar)
+        ctk.CTkFrame(c, fg_color="transparent", height=6).pack()
+
+    def _cartao_bloquear(self):
+        c = self._cartao("O que bloquear", "Clique no ? para ver como cada um funciona.")
+        cfg = self.cfg
+        self._linha(c, "🖼️", "Imagens e vídeos", "IA olha a tela e cobre nudez em qualquer app",
+                    "imagens", "nudez" in cfg["detectores"], self._alternar)
+        linha = self._linha(c, "🌐", "Sites adultos", "Sites da lista nem carregam, em todo navegador",
+                            "sites", cfg["bloquear_sites"], self._alternar)
+        self.bt_lista = ctk.CTkButton(linha, text="Editar lista", width=96, height=26,
+                                      fg_color="transparent", border_width=1, border_color=BORDA,
+                                      text_color=ACENTO, hover_color=BORDA, font=fonte(11),
+                                      command=self.editar_sites)
+        self.bt_lista.pack(side="right", padx=(0, 6))
+        self._linha(c, "🔎", "Busca segura", "Resultados explícitos somem do Google, Bing e DuckDuckGo",
+                    "safesearch", cfg["forcar_safesearch"], self._alternar)
+        self._linha(c, "🏷️", "Palavras no título da aba", "Aba com nome proibido cobre a tela",
+                    "titulo", cfg["titulo_ativo"], self._alternar)
+        self._linha(c, "📝", "Texto na página", "Palavra proibida escrita na página cobre a tela",
+                    "ocr", cfg["ocr"]["ativo"], self._alternar)
+        ctk.CTkFrame(c, fg_color="transparent", height=6).pack()
+
+    def _cartao_cobrir(self):
+        c = self._cartao("Como cobrir")
+        self.seg_modo = ctk.CTkSegmentedButton(
+            c, values=["Só a área", "Tela inteira"], font=fonte(13), height=34,
+            selected_color=ACENTO, selected_hover_color=ACENTO_HOVER, command=self._mudar_modo)
+        self.seg_modo.pack(fill="x", padx=16, pady=(10, 8))
+
+        self.sliders = {}
+        itens = [
+            ("sens", "Sensibilidade", 0, 100),
+            ("margem", "Área extra em volta", 0, 100),
+            ("suave", "Borda suave", 0, 120),
+        ]
+        for chave, titulo, a, b in itens:
+            f = ctk.CTkFrame(c, fg_color="transparent")
+            f.pack(fill="x", padx=16, pady=(4, 0))
+            ctk.CTkLabel(f, text=titulo, font=fonte(13)).pack(side="left")
+            lb = ctk.CTkLabel(f, text="", font=fonte(12, "bold"), text_color=ACENTO)
+            lb.pack(side="right")
+            s = ctk.CTkSlider(c, from_=a, to=b, progress_color=ACENTO, button_color=ACENTO,
+                              button_hover_color=ACENTO_HOVER,
+                              command=lambda v, k=chave: self._mover(k, v))
+            # roda do mouse só rola a página; o slider muda só arrastando
+            s._canvas.unbind("<MouseWheel>")
+            s.pack(fill="x", padx=16, pady=(2, 6))
+            self.sliders[chave] = (s, lb)
+        self._mostrar_cobrir()
+        ctk.CTkFrame(c, fg_color="transparent", height=6).pack()
+
+    def _mostrar_cobrir(self):
+        cfg = self.cfg
+        self.seg_modo.set("Tela inteira" if cfg["modo"] == "tela" else "Só a área")
+        valores = {"sens": (1.6 - cfg["limiar_bloqueio"]) * 100, "margem": cfg["margem"] * 100,
+                   "suave": cfg["suavizar_px"]}
+        for chave, v in valores.items():
+            self.sliders[chave][0].set(v)
+            self._rotulo(chave, v)
+
+    def _cartao_sistema(self):
+        c = self._cartao("Sistema")
+        self._linha(c, "🚀", "Iniciar com o Windows", "Liga sozinho quando você entra no PC",
+                    "autostart", protecao.autostart_ativo(), self._alternar)
+        f = ctk.CTkFrame(c, fg_color="transparent")
+        f.pack(fill="x", padx=14, pady=(8, 14))
+        estilo = dict(height=32, corner_radius=10, fg_color="transparent", border_width=1,
+                      border_color=BORDA, text_color=("#111827", "#E5E7EB"), hover_color=BORDA,
+                      font=fonte(12))
+        ctk.CTkButton(f, text="Ver log", width=74, command=lambda: self._abrir(
+            os.path.join(config.PASTA, "logs", "bloqueador.log")), **estilo).pack(side="left", padx=2)
+        ctk.CTkButton(f, text="Atalhos…", width=80, command=self.boas_vindas,
+                      **estilo).pack(side="left", padx=2)
+        self.bt_resetar = ctk.CTkButton(f, text="Restaurar padrão", width=120,
+                                        command=self.resetar, **estilo)
+        self.bt_resetar.pack(side="left", padx=2)
+        estilo.update(text_color=VERMELHO, border_color=VERMELHO)
+        self.bt_desligar = ctk.CTkButton(f, text="Desligar tudo", width=100,
+                                         command=self.desligar_tudo, **estilo)
+        self.bt_desligar.pack(side="right", padx=2)
 
     def _cabecalho(self):
         f = ctk.CTkFrame(self.corpo, fg_color="transparent")
@@ -155,91 +341,6 @@ class Painel(ctk.CTk):
         self.lb_info.pack(anchor="w", padx=16)
         self.lb_ultimo = ctk.CTkLabel(c, text="", font=fonte(12), text_color=TEXTO2)
         self.lb_ultimo.pack(anchor="w", padx=16, pady=(0, 14))
-
-    def _cartao_restrito(self):
-        c = self._cartao()
-        f = ctk.CTkFrame(c, fg_color="transparent")
-        f.pack(fill="x", padx=12, pady=12)
-        emoji(f, "🔒", 24, 44).pack(side="left")
-        t = ctk.CTkFrame(f, fg_color="transparent")
-        t.pack(side="left", fill="x", expand=True, padx=(4, 8))
-        ctk.CTkLabel(t, text="Modo restrito", font=fonte(15, "bold"), anchor="w").pack(fill="x")
-        self.lb_restrito = ctk.CTkLabel(t, text="", font=fonte(12), text_color=TEXTO2,
-                                        anchor="w", justify="left", wraplength=300)
-        self.lb_restrito.pack(fill="x")
-        self.bt_restrito = ctk.CTkButton(f, text="Ativar", width=96, height=34, corner_radius=10,
-                                         fg_color=ACENTO, hover_color=ACENTO_HOVER,
-                                         font=fonte(13, "bold"), command=self.restrito)
-        self.bt_restrito.pack(side="right")
-
-    def _cartao_bloquear(self):
-        c = self._cartao("O que bloquear")
-        cfg = self.cfg
-        self._linha(c, "🖼️", "Imagens e vídeos", "IA analisa a tela e cobre nudez",
-                    "imagens", "nudez" in cfg["detectores"], self._alternar)
-        linha = self._linha(c, "🌐", "Sites adultos", "Bloqueia a lista de sites em todo navegador",
-                            "sites", cfg["bloquear_sites"], self._alternar)
-        self.bt_lista = ctk.CTkButton(linha, text="Editar lista", width=86, height=26,
-                                      fg_color="transparent", border_width=1, border_color=BORDA,
-                                      text_color=ACENTO, hover_color=BORDA, font=fonte(11),
-                                      command=self.editar_sites)
-        self.bt_lista.pack(side="right", padx=8)
-        self._linha(c, "🔎", "Busca segura", "SafeSearch sempre ligado no Google, Bing e DuckDuckGo",
-                    "safesearch", cfg["forcar_safesearch"], self._alternar)
-        self._linha(c, "🏷️", "Palavras no título da aba", "Ex.: abrir uma aba com nome proibido",
-                    "titulo", cfg["titulo_ativo"], self._alternar)
-        self._linha(c, "📝", "Texto na página", "Lê o texto do navegador (mensagens em apps não contam)",
-                    "ocr", cfg["ocr"]["ativo"], self._alternar)
-        ctk.CTkFrame(c, fg_color="transparent", height=6).pack()
-
-    def _cartao_cobrir(self):
-        c = self._cartao("Como cobrir")
-        self.seg_modo = ctk.CTkSegmentedButton(
-            c, values=["Só a área", "Tela inteira"], font=fonte(13), height=34,
-            selected_color=ACENTO, selected_hover_color=ACENTO_HOVER, command=self._mudar_modo)
-        self.seg_modo.set("Tela inteira" if self.cfg["modo"] == "tela" else "Só a área")
-        self.seg_modo.pack(fill="x", padx=16, pady=(10, 8))
-
-        self.sliders = {}
-        itens = [
-            ("sens", "Sensibilidade", 0, 100, (1.6 - self.cfg["limiar_bloqueio"]) * 100),
-            ("margem", "Área extra em volta", 0, 100, self.cfg["margem"] * 100),
-            ("suave", "Borda suave", 0, 120, self.cfg["suavizar_px"]),
-        ]
-        for chave, titulo, a, b, valor in itens:
-            f = ctk.CTkFrame(c, fg_color="transparent")
-            f.pack(fill="x", padx=16, pady=(4, 0))
-            ctk.CTkLabel(f, text=titulo, font=fonte(13)).pack(side="left")
-            lb = ctk.CTkLabel(f, text="", font=fonte(12, "bold"), text_color=ACENTO)
-            lb.pack(side="right")
-            s = ctk.CTkSlider(c, from_=a, to=b, progress_color=ACENTO, button_color=ACENTO,
-                              button_hover_color=ACENTO_HOVER,
-                              command=lambda v, k=chave: self._mover(k, v))
-            s.set(valor)
-            s.pack(fill="x", padx=16, pady=(2, 6))
-            self.sliders[chave] = (s, lb)
-            self._rotulo(chave, valor)
-        ctk.CTkFrame(c, fg_color="transparent", height=6).pack()
-
-    def _cartao_sistema(self):
-        c = self._cartao("Sistema")
-        self._linha(c, "🚀", "Iniciar com o Windows", "Liga sozinho quando você entra no PC",
-                    "autostart", protecao.autostart_ativo(), self._alternar)
-        self._linha(c, "🛡️", "Proteção forte", "Se alguém fechar, o Windows reabre em até 1 min (pede admin)",
-                    "forte", protecao.tarefa_existe(), self._alternar)
-        f = ctk.CTkFrame(c, fg_color="transparent")
-        f.pack(fill="x", padx=14, pady=(8, 14))
-        estilo = dict(height=32, corner_radius=10, fg_color="transparent", border_width=1,
-                      border_color=BORDA, text_color=("#111827", "#E5E7EB"), hover_color=BORDA,
-                      font=fonte(12))
-        ctk.CTkButton(f, text="Ver log", width=90, command=lambda: self._abrir(
-            os.path.join(config.PASTA, "logs", "bloqueador.log")), **estilo).pack(side="left", padx=2)
-        ctk.CTkButton(f, text="Atalhos…", width=90, command=self.boas_vindas,
-                      **estilo).pack(side="left", padx=2)
-        estilo.update(text_color=VERMELHO, border_color=VERMELHO)
-        self.bt_desligar = ctk.CTkButton(f, text="Desligar tudo", width=110,
-                                         command=self.desligar_tudo, **estilo)
-        self.bt_desligar.pack(side="right", padx=2)
 
     # ================= helpers =================
     def avisar(self, txt, cor=TEXTO2, segundos=5):
@@ -426,7 +527,54 @@ class Painel(ctk.CTk):
         self.vars["forte"].set(False)
         self.avisar("Tudo desligado. Para voltar, ligue a chave lá em cima.", LARANJA, 10)
 
+    def resetar(self):
+        if protecao.restrito_ativo():
+            self.avisar("🔒 Modo restrito: não dá para restaurar agora.", LARANJA)
+            return
+        self._escolher("Restaurar padrão?",
+                       "Volta \"O que bloquear\" e \"Como cobrir\" para o padrão.\n"
+                       "A lista de sites, as travas e o início com o Windows não mudam.",
+                       [("Restaurar", 1)], lambda _: self._resetar())
+
+    def _resetar(self):
+        padrao = copy.deepcopy(config.PADRAO)
+        atual = config.carregar()
+        padrao["sites_bloqueados"] = atual["sites_bloqueados"]  # mantém a lista
+        config.salvar(padrao)
+        self.cfg = padrao
+        self.vars["imagens"].set("nudez" in padrao["detectores"])
+        self.vars["titulo"].set(padrao["titulo_ativo"])
+        self.vars["ocr"].set(padrao["ocr"]["ativo"])
+        self.vars["sites"].set(padrao["bloquear_sites"])
+        self.vars["safesearch"].set(padrao["forcar_safesearch"])
+        self._mostrar_cobrir()
+        desejada = sites.secao_desejada(config.caminho(padrao["sites_bloqueados"]),
+                                        padrao["bloquear_sites"], padrao["forcar_safesearch"])
+        if desejada != sites.secao_atual():
+            self._admin(["hosts_aplicar"], lambda: None)
+        else:
+            self.avisar("Configurações restauradas ✓", VERDE)
+
     # ================= janelas =================
+    def explicar(self, chave):
+        titulo, partes = INFO[chave]
+        titulo = titulo.replace("️", "")  # o Tk desenha esse seletor como espaço
+        if self.popup and self.popup.winfo_exists():
+            self.popup.destroy()
+        j = self.popup = ctk.CTkToplevel(self, fg_color=CARTAO)
+        j.title(titulo.split(" ", 1)[1])
+        j.resizable(False, False)
+        j.transient(self)
+        por_icone(j)
+        ctk.CTkLabel(j, text=titulo, font=fonte(17, "bold")).pack(anchor="w", padx=22, pady=(18, 6))
+        for sub, texto in partes:
+            ctk.CTkLabel(j, text=sub, font=fonte(13, "bold"), text_color=ACENTO,
+                         anchor="w").pack(fill="x", padx=22, pady=(8, 0))
+            ctk.CTkLabel(j, text=texto, font=fonte(12), justify="left", anchor="w",
+                         wraplength=380).pack(fill="x", padx=22)
+        ctk.CTkButton(j, text="Entendi", height=34, corner_radius=10, fg_color=ACENTO,
+                      hover_color=ACENTO_HOVER, command=j.destroy).pack(fill="x", padx=22, pady=18)
+        centralizar(j, self)
     def _escolher(self, titulo, texto, opcoes, ao_escolher, perigo=False):
         if self.popup and self.popup.winfo_exists():
             self.popup.focus()
@@ -571,6 +719,7 @@ class Painel(ctk.CTk):
         self.sw_ligado.configure(state=estado)
         self.bt_desligar.configure(state=estado)
         self.bt_lista.configure(state=estado)
+        self.bt_resetar.configure(state=estado)
         self.after(1000, self._status)
 
 

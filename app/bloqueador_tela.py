@@ -501,6 +501,15 @@ def vigiar_guardiao(estado):
                 print("Erro ao iniciar guardião:", e)
 
 
+def mais_fraco(novo, atual):
+    """True se o config novo protege menos que o atual (bloqueado no modo restrito)."""
+    return (len(novo["detectores"]) < len(atual["detectores"])
+            or (atual["titulo_ativo"] and not novo["titulo_ativo"])
+            or (atual["ocr"]["ativo"] and not novo["ocr"]["ativo"])
+            or novo["limiar_bloqueio"] > atual["limiar_bloqueio"]
+            or (atual["modo"] == "tela" and novo["modo"] == "parte"))
+
+
 # mudar estas chaves troca os modelos de IA: aí precisa reiniciar o app
 PRECISA_REINICIAR = ("detectores", "dispositivo", "nudenet", "classificador")
 
@@ -600,17 +609,23 @@ def main():
             if m != mtime_cfg[0]:
                 mtime_cfg[0] = m
                 novo = config.carregar()
-                if any(novo[k] != cfg[k] for k in PRECISA_REINICIAR):
+                if protecao.restrito_ativo() and mais_fraco(novo, cfg):
+                    print("Mudança no config ignorada: modo restrito ativo.")
+                    novo = None
+                if novo is None:
+                    pass
+                elif any(novo[k] != cfg[k] for k in PRECISA_REINICIAR):
                     print("Config mudou (modelos); reiniciando.")
                     reiniciar[0] = True
                     estado.rodando = False
                     overlay.root.destroy()
                     return
-                cfg.clear()
-                cfg.update(novo)  # as threads usam o mesmo dicionário
-                trabalhador.recarregar()
-                Saida.palavras = cfg["palavras_titulo"] + cfg["ocr"]["palavras"]
-                print("Config atualizado.")
+                else:
+                    cfg.clear()
+                    cfg.update(novo)  # as threads usam o mesmo dicionário
+                    trabalhador.recarregar()
+                    Saida.palavras = cfg["palavras_titulo"] + cfg["ocr"]["palavras"]
+                    print("Config atualizado.")
         with estado.lock:
             patches = list(estado.patches)
             versao = estado.versao
