@@ -78,7 +78,8 @@ PADRAO = {
         "ativo": False,
         "intervalo": 2.0
     },
-    "sites_bloqueados": "sites_bloqueados.txt"
+    "sites_bloqueados": "sites_bloqueados.txt",
+    "forcar_safesearch": True    # Google/Bing/DuckDuckGo sempre com SafeSearch
 }
 
 

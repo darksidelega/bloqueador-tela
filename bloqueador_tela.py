@@ -19,7 +19,7 @@ import mss
 import numpy as np
 from PIL import Image, ImageTk
 
-from bloqueador import config, regioes
+from bloqueador import config, regioes, sites
 from bloqueador.detectores import criar_detectores
 
 user32 = ctypes.windll.user32 if os.name == "nt" else None
@@ -193,6 +193,21 @@ def trabalhador(monitor, estado, cfg):
                 time.sleep(resto)
 
 
+def vigiar_hosts(estado, cfg):
+    """Reaplica o bloqueio de sites se alguém apagar do hosts (precisa admin)."""
+    if not sites.eh_admin():
+        print("Aviso: sem admin, o bloqueio de sites (hosts) não é verificado.")
+        return
+    lista = config.caminho(cfg["sites_bloqueados"])
+    while estado.rodando:
+        try:
+            if sites.aplicar(lista, cfg["forcar_safesearch"]):
+                print("Bloqueio de sites aplicado no hosts.")
+        except Exception as e:
+            print("Erro ao aplicar hosts:", e)
+        time.sleep(60)
+
+
 def main():
     if os.name != "nt":
         print("Este app é só para Windows.")
@@ -208,6 +223,7 @@ def main():
     estado = Estado()
     threading.Thread(target=trabalhador, args=(monitor, estado, cfg),
                      daemon=True).start()
+    threading.Thread(target=vigiar_hosts, args=(estado, cfg), daemon=True).start()
 
     ultima_versao = [-1]
 
