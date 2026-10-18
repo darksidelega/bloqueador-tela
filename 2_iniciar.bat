@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-start "" pyw -3.12 bloqueador_tela.py
+start "" ".venv\Scripts\pythonw.exe" bloqueador_tela.py
