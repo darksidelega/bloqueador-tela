@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+modelos/
+dist/
+build/
+*.spec
+logs/

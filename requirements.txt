@@ -1,0 +1,5 @@
+nudenet
+mss
+pillow
+numpy
+opencv-python-headless
