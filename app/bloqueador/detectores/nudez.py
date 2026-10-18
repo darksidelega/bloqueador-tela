@@ -44,15 +44,17 @@ class Cache:
         return v
 
 
-# classes em que uma detecção fraca (pouca confiança) deve pesar pouco:
-# abaixo de 0.5 a contribuição cai por uma curva quadrática (0.3 vira ~0.18,
-# 0.2 vira ~0.08). Acima de 0.5 conta normal. Rosto e barriga ficam de fora.
-_CLASSES_RAMPA = {"FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "ANUS_EXPOSED",
-                  "FEMALE_GENITALIA_COVERED", "ANUS_COVERED", "BUTTOCKS_EXPOSED",
+# "genitália/ânus exposto" com confiança baixa é pouco confiável (o NudeNet
+# marca isso em close-up de olho, cotovelo, umbigo...): abaixo de 0.5 não conta.
+_PISO_GENITALIA = {"FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "ANUS_EXPOSED"}
+# outras classes: detecção fraca (<0.5) pesa pouco, por uma curva quadrática.
+_CLASSES_RAMPA = {"FEMALE_GENITALIA_COVERED", "ANUS_COVERED", "BUTTOCKS_EXPOSED",
                   "FEMALE_BREAST_EXPOSED"}
 
 
 def _efetivo(classe, score):
+    if classe in _PISO_GENITALIA and score < 0.5:
+        return 0.0
     if classe in _CLASSES_RAMPA and score < 0.5:
         return score * score / 0.5
     return score
@@ -204,18 +206,17 @@ class DetectorNudez(Detector):
                 termos.pop(c, None)
             detalhes.append("(contexto masculino)")
 
-        # classificador sozinho não basta: precisa de algum sinal de corpo feminino
-        # ou genitália (o classificador dá 0.95 em telas de UFC sem nada explícito)
-        sinais = ["FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "ANUS_EXPOSED",
-                  "BUTTOCKS_EXPOSED", "FACE_FEMALE"]
-        if not masculino:
-            # barriga de fora + classificador certo = nua tapando o peito com a mão
-            sinais += ["FEMALE_BREAST_EXPOSED", "BELLY_EXPOSED"]
-        tem_sinal = any(s(c) >= 0.25 for c in sinais)
-        if "classificador" in termos and not tem_sinal:
+        # o classificador sozinho não basta: só conta cheio se houver PELE de
+        # verdade exposta (peito/nádega/genitália >= 0.5, ou barriga >= 0.6).
+        # Rosto ou coisa "coberta" não liberam — senão o classificador, que erra
+        # em olho de close-up, tela de UFC, biquíni, cobre a tela sozinho.
+        exposto = (max(s("FEMALE_BREAST_EXPOSED"), s("BUTTOCKS_EXPOSED"),
+                       s("FEMALE_GENITALIA_EXPOSED"), s("MALE_GENITALIA_EXPOSED"),
+                       s("ANUS_EXPOSED")) >= 0.5 or s("BELLY_EXPOSED") >= 0.6)
+        if "classificador" in termos and not exposto:
             if termos["classificador"] > cfg["teto_classificador_sozinho"]:
                 termos["classificador"] = cfg["teto_classificador_sozinho"]
-                detalhes.append("(classificador sozinho: teto)")
+                detalhes.append("(classificador sem pele exposta: teto)")
 
         # peito feminino sozinho não basta
         outros = [c for c, v in termos.items()
