@@ -82,13 +82,25 @@ function pedirEaplicar() {
 
 pedirEaplicar();
 
-// o YouTube/Instagram/TikTok trocam de página sem recarregar (SPA): reaplica
-// o redirecionamento quando a URL muda, e repede o ajuste de vez em quando.
+// o YouTube/Instagram/TikTok trocam de página sem recarregar (SPA). Para o
+// reel não chegar a tocar, intercepto a navegação na hora: quando o site
+// chama history.pushState/replaceState (clicar num post abre /reel/...),
+// redireciono no mesmo instante, antes de o vídeo carregar.
 let ultimaUrl = location.href;
-setInterval(() => {
+function aoNavegar() {
   if (location.href !== ultimaUrl) {
     ultimaUrl = location.href;
     if (ligadoAgora) redirecionar();
   }
-}, 500);
+}
+for (const metodo of ["pushState", "replaceState"]) {
+  const original = history[metodo];
+  history[metodo] = function () {
+    const r = original.apply(this, arguments);
+    aoNavegar();
+    return r;
+  };
+}
+window.addEventListener("popstate", aoNavegar);
+setInterval(aoNavegar, 300);  // rede de segurança
 setInterval(pedirEaplicar, 30000);
