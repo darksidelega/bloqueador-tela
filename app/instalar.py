@@ -1,10 +1,11 @@
-"""Baixa os modelos de IA para a pasta modelos/ (só na instalação).
-Depois disso tudo roda offline; nenhuma imagem da tela sai do PC."""
+"""Instalação: baixa os modelos de IA, cria o config, liga o início com o
+Windows e inicia o bloqueador. Depois disso tudo roda offline; nenhuma
+imagem da tela sai do PC."""
 import os
 import sys
 import urllib.request
 
-from bloqueador import config
+from bloqueador import config, protecao
 
 MODELOS = {
     # NudeNet v3.4 (via API do GitHub; o link direto pede login)
@@ -38,6 +39,7 @@ def baixar(nome, url, cabecalhos):
 
 
 if __name__ == "__main__":
+    os.chdir(config.PASTA)
     os.makedirs(config.caminho("modelos"), exist_ok=True)
     print("Baixando modelos:")
     try:
@@ -46,3 +48,9 @@ if __name__ == "__main__":
     except Exception as e:
         print("\nERRO:", e)
         sys.exit(1)
+    config.carregar()
+    protecao.autostart(True)
+    print("Início com o Windows: ligado.")
+    if not protecao.esta_rodando("guardiao"):
+        protecao.iniciar_guardiao()
+    print("Bloqueador iniciado.")

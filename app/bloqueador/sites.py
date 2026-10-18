@@ -78,9 +78,20 @@ def secao_atual():
     return ""
 
 
-def aplicar(lista, safesearch=True):
+def secao_desejada(lista, bloquear_sites=True, safesearch=True):
+    """Texto que a seção do hosts deve ter ("" = nada)."""
+    if not bloquear_sites and not safesearch:
+        return ""
+    return montar_secao(ler_lista(lista) if bloquear_sites else [], safesearch)
+
+
+def aplicar(lista, safesearch=True, bloquear_sites=True):
     """Grava a seção no hosts se mudou. Retorna True se gravou."""
-    nova = montar_secao(ler_lista(lista), safesearch)
+    nova = secao_desejada(lista, bloquear_sites, safesearch)
+    if not nova:
+        mudou = bool(secao_atual())
+        remover()
+        return mudou
     if secao_atual() == nova:
         return False
     texto = _remover_secao(_ler_hosts()).rstrip("\n") + "\n\n" + nova

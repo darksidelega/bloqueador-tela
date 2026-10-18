@@ -16,8 +16,8 @@ import time
 
 from . import config
 
-ARQ_SENHA = config.caminho("senha.json")
-ARQ_PAUSA = config.caminho("pausa.json")
+ARQ_SENHA = os.path.join(config.DADOS, "senha.json")
+ARQ_PAUSA = os.path.join(config.DADOS, "pausa.json")
 NOME_TAREFA = "BloqueadorTela"
 kernel32 = ctypes.windll.kernel32
 
@@ -99,26 +99,110 @@ def esta_rodando(nome):
     return False
 
 
-# ---------------- tarefa agendada ----------------
+# ---------------- iniciar/parar ----------------
+SEM_JANELA = 0x08000000
+
+
 def pythonw():
-    exe = sys.executable
-    w = os.path.join(os.path.dirname(exe), "pythonw.exe")
-    return w if os.path.isfile(w) else exe
+    """pythonw.exe do .venv do projeto (sem janela de console)."""
+    venv = os.path.join(config.PASTA, ".venv", "Scripts", "pythonw.exe")
+    if os.path.isfile(venv):
+        return venv
+    w = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    return w if os.path.isfile(w) else sys.executable
+
+
+def script(nome):
+    return os.path.join(config.APP, nome)
 
 
 def comando_guardiao():
     """(programa, argumentos) para iniciar o guardião."""
-    if getattr(sys, "frozen", False):
-        return sys.executable, "--guardiao"
-    return pythonw(), f'"{config.caminho("guardiao.py")}"'
+    return pythonw(), f'"{script("guardiao.py")}"'
 
 
 def iniciar_guardiao():
     prog, args = comando_guardiao()
     subprocess.Popen(f'"{prog}" {args}', cwd=config.PASTA,
-                     creationflags=0x08000000 | 0x00000008)  # sem janela, separado
+                     creationflags=SEM_JANELA | 0x00000008)  # separado
 
 
+def iniciar_app():
+    subprocess.Popen([pythonw(), script("bloqueador_tela.py")], cwd=config.PASTA,
+                     creationflags=SEM_JANELA | 0x00000008)
+
+
+def processos(nomes=("bloqueador_tela.py", "guardiao.py")):
+    import psutil
+    achados = []
+    for p in psutil.process_iter(["name", "cmdline"]):
+        cmd = p.info["cmdline"] or []
+        eh_python = (p.info["name"] or "").lower().startswith("python")
+        if eh_python and any(c.endswith(nomes) for c in cmd[1:]):
+            achados.append(p)
+    return achados
+
+
+def parar_app():
+    for p in processos(("bloqueador_tela.py",)):
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+
+def liberar_mutexes():
+    while _mutexes:
+        kernel32.CloseHandle(_mutexes.pop())
+
+
+# ---------------- iniciar com o Windows (sem admin) ----------------
+CHAVE_RUN = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def autostart_ativo():
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, CHAVE_RUN) as k:
+            winreg.QueryValueEx(k, NOME_TAREFA)
+        return True
+    except OSError:
+        return False
+
+
+def autostart(ligar):
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, CHAVE_RUN, 0, winreg.KEY_SET_VALUE) as k:
+        if ligar:
+            prog, args = comando_guardiao()
+            winreg.SetValueEx(k, NOME_TAREFA, 0, winreg.REG_SZ, f'"{prog}" {args}')
+        else:
+            try:
+                winreg.DeleteValue(k, NOME_TAREFA)
+            except OSError:
+                pass
+
+
+# ---------------- ações que precisam de administrador ----------------
+def rodar_admin(*args):
+    """Roda app/admin.py elevado (aparece o aviso do Windows). Retorna True se deu certo."""
+    lista = ",".join(f"'{a}'" for a in ('"' + script("admin.py") + '"',) + args)
+    ps = (f"$p = Start-Process -FilePath '{pythonw()}' -ArgumentList {lista} "
+          f"-Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       capture_output=True, creationflags=SEM_JANELA)
+    return r.returncode == 0
+
+
+def pausa_ate():
+    try:
+        with open(ARQ_PAUSA, encoding="utf-8") as f:
+            return json.load(f)["ate"] if pausa_ativa() else 0
+    except Exception:
+        return 0
+
+
+# ---------------- tarefa agendada (proteção forte, admin) ----------------
 def criar_tarefa():
     """Tarefa: ao fazer logon e a cada 1 min (se o guardião foi morto, volta),
     com privilégios mais altos. Precisa rodar como administrador."""
@@ -162,7 +246,7 @@ def criar_tarefa():
     </Exec>
   </Actions>
 </Task>"""
-    arq = config.caminho("tarefa.xml")
+    arq = os.path.join(config.DADOS, "tarefa.xml")
     with open(arq, "w", encoding="utf-16") as f:
         f.write(xml)
     r = subprocess.run(["schtasks", "/Create", "/TN", NOME_TAREFA, "/XML", arq, "/F"],

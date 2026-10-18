@@ -9,11 +9,8 @@ if not exist .venv (
 ".venv\Scripts\python.exe" -m pip install --upgrade pip -q
 echo Instalando dependencias...
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt -q || (pause & exit /b 1)
-".venv\Scripts\python.exe" baixar_modelos.py || (pause & exit /b 1)
-".venv\Scripts\python.exe" -c "from bloqueador import config; config.carregar()"
+".venv\Scripts\python.exe" app\instalar.py || (pause & exit /b 1)
 echo.
-echo Pronto! Ajustes ficam em config.json.
-echo  - 2_iniciar.bat           : inicia o bloqueador
-echo  - 4_ativar_protecao.bat   : senha + iniciar com o Windows + bloquear sites
-echo.
-pause
+echo Pronto! Abrindo o Painel...
+start "" ".venv\Scripts\pythonw.exe" app\painel.py
+timeout /t 3 >nul

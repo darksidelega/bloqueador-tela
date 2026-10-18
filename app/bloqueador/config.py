@@ -2,14 +2,12 @@
 import copy
 import json
 import os
-import sys
 
-if getattr(sys, "frozen", False):
-    PASTA = os.path.dirname(sys.executable)
-else:
-    PASTA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-CAMINHO = os.path.join(PASTA, "config.json")
+# raiz do projeto (app/bloqueador/config.py -> sobe 3 níveis)
+PASTA = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+APP = os.path.join(PASTA, "app")
+DADOS = os.path.join(PASTA, "dados")
+CAMINHO = os.path.join(DADOS, "config.json")
 
 PADRAO = {
     "debug": True,
@@ -83,6 +81,7 @@ PADRAO = {
     "regiao_grande": 0.3,
     "fator_veto": 0.6,
 
+    "titulo_ativo": True,        # bloqueia pela palavra no título da aba
     "palavras_titulo": [
         "porn", "pornô", "porno", "xxx", "xvideos", "xnxx", "xhamster",
         "redtube", "youporn", "hentai", "nsfw", "onlyfans", "putaria",
@@ -113,7 +112,8 @@ PADRAO = {
         "cmd.exe", "python", "visual studio code", "bloco de notas", "notepad",
         "bloqueador.log", "sites_bloqueados", "config.json", "bloqueador-tela"
     ],
-    "sites_bloqueados": "sites_bloqueados.txt",
+    "sites_bloqueados": "dados/sites_bloqueados.txt",
+    "bloquear_sites": True,      # aplica a lista no arquivo hosts (precisa admin)
     "forcar_safesearch": True    # Google/Bing/DuckDuckGo sempre com SafeSearch
 }
 
@@ -127,15 +127,34 @@ def _mesclar(base, novo):
     return base
 
 
+def _migrar():
+    """Versões antigas guardavam tudo na raiz; move para dados/."""
+    os.makedirs(DADOS, exist_ok=True)
+    for nome in ("config.json", "senha.json", "pausa.json", "sites_bloqueados.txt"):
+        velho, novo = os.path.join(PASTA, nome), os.path.join(DADOS, nome)
+        if os.path.isfile(velho) and not os.path.isfile(novo):
+            os.replace(velho, novo)
+
+
 def carregar():
+    _migrar()
     cfg = copy.deepcopy(PADRAO)
     if os.path.isfile(CAMINHO):
         with open(CAMINHO, encoding="utf-8") as f:
             _mesclar(cfg, json.load(f))
+        if cfg["sites_bloqueados"] == "sites_bloqueados.txt":
+            cfg["sites_bloqueados"] = PADRAO["sites_bloqueados"]
     else:
         with open(CAMINHO, "w", encoding="utf-8") as f:
             json.dump(PADRAO, f, ensure_ascii=False, indent=2)
     return cfg
+
+
+def salvar(cfg):
+    tmp = CAMINHO + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CAMINHO)
 
 
 def caminho(rel):

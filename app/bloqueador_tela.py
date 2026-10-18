@@ -9,6 +9,7 @@ Fechar/pausar: Ctrl + Alt + Shift + Q (pede a senha, se houver)
 """
 import ctypes
 import ctypes.wintypes
+import json
 import os
 import re
 import sys
@@ -288,6 +289,10 @@ class Trabalhador:
         self.ultimo_titulo_ruim = None
         self.parados = 0
         self.suspeito_ate = 0.0
+        self.ultimo_bloqueio = ""
+        self.analises = 0
+        self.ms_total = 0.0
+        self.status_em = time.time()
 
     def rodar(self):
         self.detectores = criar_detectores(self.cfg)
@@ -312,7 +317,7 @@ class Trabalhador:
 
         titulo, processo, rect_janela = janela_ativa()
         vale = eh_navegador(processo, cfg) and not any(j in titulo for j in self.ignorar)
-        titulo_ruim = vale and (any(p in titulo for p in self.palavras)
+        titulo_ruim = vale and ((cfg["titulo_ativo"] and any(p in titulo for p in self.palavras))
                                 or (time.time() < estado.ocr_ate
                                     and titulo == estado.ocr_titulo))
         if not mudou and titulo_ruim == self.ultimo_titulo_ruim:
@@ -320,6 +325,7 @@ class Trabalhador:
             self.parados += 1
             if estado.patches:
                 self.ultimo_achado = time.time()
+            self.escrever_status(bool(estado.patches))
             self.dormir(t0)
             return
         self.ultimo_titulo_ruim = titulo_ruim
@@ -365,6 +371,13 @@ class Trabalhador:
                 estado.versao += 1
 
         t3 = time.perf_counter()
+        self.analises += 1
+        self.ms_total += (t3 - t0) * 1000
+        if novos:
+            motivo = ("título/texto" if titulo_ruim else
+                      " | ".join(f"{a.origem} {a.pontos:.2f}" for a in achados if a.bloquear))
+            self.ultimo_bloqueio = time.strftime("%H:%M:%S ") + motivo
+        self.escrever_status(bool(novos))
         if cfg["debug"]:
             self.medidor.add(captura=t1 - t0, ia=t2 - t1, mosaico=t3 - t2,
                              total=t3 - t0, parados=self.parados)
@@ -375,6 +388,29 @@ class Trabalhador:
                                         classificador=d.cache_clf.execucoes)
                     d.cache_det.execucoes = d.cache_clf.execucoes = 0
         self.dormir(t0)
+
+    def escrever_status(self, bloqueando):
+        """dados/status.json: o Painel lê para mostrar se está ativo."""
+        agora = time.time()
+        if agora - self.status_em < 2:
+            return
+        dur = agora - self.status_em
+        status = {
+            "pid": os.getpid(), "atualizado": agora, "bloqueando": bloqueando,
+            "dispositivo": ", ".join(getattr(d, "dispositivo", "?") for d in self.detectores)
+                           or "detecção de imagens desligada",
+            "analises_s": round(self.analises / dur, 1),
+            "ms": round(self.ms_total / max(1, self.analises)),
+            "ultimo_bloqueio": self.ultimo_bloqueio,
+        }
+        self.analises, self.ms_total, self.status_em = 0, 0.0, agora
+        try:
+            tmp = os.path.join(config.DADOS, "status.json.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(status, f)
+            os.replace(tmp, os.path.join(config.DADOS, "status.json"))
+        except OSError:
+            pass
 
     def dormir(self, t0):
         intervalo = self.cfg["intervalo_rapido" if time.time() < self.suspeito_ate
@@ -435,12 +471,11 @@ def vigiar_ocr(monitor, estado, cfg):
 def vigiar_hosts(estado, cfg):
     """Reaplica o bloqueio de sites se alguém apagar do hosts (precisa admin)."""
     if not sites.eh_admin():
-        print("Aviso: sem admin, o bloqueio de sites (hosts) não é verificado.")
-        return
+        return  # sem admin: quem aplica o hosts é o Painel
     lista = config.caminho(cfg["sites_bloqueados"])
     while estado.rodando:
         try:
-            if sites.aplicar(lista, cfg["forcar_safesearch"]):
+            if sites.aplicar(lista, cfg["forcar_safesearch"], cfg["bloquear_sites"]):
                 print("Bloqueio de sites aplicado no hosts.")
         except Exception as e:
             print("Erro ao aplicar hosts:", e)
@@ -449,7 +484,7 @@ def vigiar_hosts(estado, cfg):
 
 def vigiar_guardiao(estado):
     """Se a proteção está instalada e alguém matar o guardião, sobe de novo."""
-    if not protecao.tarefa_existe():
+    if not (protecao.autostart_ativo() or protecao.tarefa_existe()):
         return
     while estado.rodando:
         time.sleep(10)
@@ -506,6 +541,7 @@ def main():
 
     if not protecao.instancia_unica("app"):
         return  # já tem um bloqueador rodando
+    os.chdir(config.PASTA)
     configurar_log()
     protecao.cancelar_pausa()  # abriu o app = quer proteção agora
     cfg = config.carregar()
@@ -527,6 +563,9 @@ def main():
 
     ultima_versao = [-1]
     dialogo = [None]
+    reiniciar = [False]
+    mtime_cfg = [os.path.getmtime(config.CAMINHO)]
+    tick = [0]
 
     def fechar(minutos):
         protecao.pausar(minutos)
@@ -546,6 +585,18 @@ def main():
                 dialogo[0] = janela_senha(overlay.root, fechar)
         if dialogo[0] is not None and dialogo[0].winfo_exists():
             dialogo[0].lift()  # senha sempre por cima do mosaico
+        tick[0] += 1
+        if tick[0] % 30 == 0:  # ~2 s: o Painel mudou o config? reinicia
+            try:
+                m = os.path.getmtime(config.CAMINHO)
+            except OSError:
+                m = mtime_cfg[0]
+            if m != mtime_cfg[0]:
+                print("Config mudou; reiniciando.")
+                reiniciar[0] = True
+                estado.rodando = False
+                overlay.root.destroy()
+                return
         with estado.lock:
             patches = list(estado.patches)
             versao = estado.versao
@@ -557,6 +608,9 @@ def main():
     print("Bloqueador ativo. Para pausar/fechar: Ctrl + Alt + Shift + Q")
     overlay.root.after(60, atualizar)
     overlay.root.mainloop()
+    if reiniciar[0]:
+        protecao.liberar_mutexes()
+        protecao.iniciar_app()
 
 
 if __name__ == "__main__":
