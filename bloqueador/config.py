@@ -14,7 +14,8 @@ CAMINHO = os.path.join(PASTA, "config.json")
 PADRAO = {
     "debug": True,
     "modo": "tela",              # "tela" = cobre tudo | "parte" = só a área
-    "intervalo": 0.15,           # segundos mínimos entre análises
+    "intervalo": 0.25,           # segundos entre análises (normal)
+    "intervalo_rapido": 0.10,    # quando algo suspeito aparece
     "persistencia": 1.0,         # segundos mantendo o mosaico após sumir
     "margem": 0.30,
     "bloco": 14,

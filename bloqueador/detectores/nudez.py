@@ -22,10 +22,13 @@ class Cache:
     def __init__(self, tamanho=256):
         self.d = OrderedDict()
         self.tamanho = tamanho
+        self.execucoes = 0   # quantas vezes o modelo rodou (p/ medir custo)
 
     @staticmethod
     def chave(img):
-        p = cv2.resize(img, (24, 16), interpolation=cv2.INTER_AREA) // 8
+        h, w = img.shape[:2]
+        passo = max(1, min(h, w) // 64)  # amostra antes de reduzir (rápido)
+        p = cv2.resize(img[::passo, ::passo], (24, 16), interpolation=cv2.INTER_AREA) // 8
         return hash(p.tobytes()) ^ hash(img.shape)
 
     def pegar(self, img, func):
@@ -34,6 +37,7 @@ class Cache:
             self.d.move_to_end(k)
             return self.d[k]
         v = func(img)
+        self.execucoes += 1
         self.d[k] = v
         if len(self.d) > self.tamanho:
             self.d.popitem(last=False)

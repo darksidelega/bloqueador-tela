@@ -10,3 +10,5 @@ winrt-Windows.Storage.Streams
 winrt-Windows.Foundation
 winrt-Windows.Foundation.Collections
 winrt-Windows.Globalization
+dxcam
+psutil

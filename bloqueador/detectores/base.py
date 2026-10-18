@@ -44,6 +44,9 @@ def criar_sessao(caminho, gpu):
     """Cria sessão ONNX na GPU (CUDA ou DirectML) com fallback para CPU."""
     so = ort.SessionOptions()
     so.log_severity_level = 3
+    # sem "espera ativa" das threads: economiza muita CPU entre ciclos
+    so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    so.add_session_config_entry("session.inter_op.allow_spinning", "0")
     disponiveis = ort.get_available_providers()
     tentativas = []
     if gpu:
@@ -57,6 +60,8 @@ def criar_sessao(caminho, gpu):
         try:
             if provs == ["CPUExecutionProvider"]:
                 so.intra_op_num_threads = max(1, min(4, (os.cpu_count() or 4) // 2))
+            else:
+                so.intra_op_num_threads = 1  # GPU faz o trabalho pesado
             if "DmlExecutionProvider" in provs:
                 so.enable_mem_pattern = False
                 so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL

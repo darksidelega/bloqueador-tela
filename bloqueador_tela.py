@@ -20,6 +20,7 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from bloqueador import config, ocr, protecao, regioes, sites
+from bloqueador.captura import Captura
 from bloqueador.detectores import criar_detectores
 
 user32 = ctypes.windll.user32 if os.name == "nt" else None
@@ -150,59 +151,134 @@ class Medidor:
     def __init__(self, a_cada=5.0):
         self.a_cada = a_cada
         self.somas = {}
+        self.contagens = {}
         self.n = 0
         self.inicio = time.time()
+
+    def contar(self, **qtd):
+        for k, v in qtd.items():
+            self.contagens[k] = self.contagens.get(k, 0) + v
 
     def add(self, **tempos):
         for k, v in tempos.items():
             self.somas[k] = self.somas.get(k, 0) + v
         self.n += 1
         if time.time() - self.inicio >= self.a_cada:
+            parados = self.somas.pop("parados", 0)
             partes = " | ".join(f"{k} {v / self.n * 1000:.0f}ms"
                                 for k, v in self.somas.items())
-            print(f"[tempo] {self.n / (time.time() - self.inicio):.1f} ciclos/s | {partes}")
+            partes += f" | {parados} ciclos pulados (tela parada)"
+            if self.contagens:
+                partes += " | por análise: " + ", ".join(
+                    f"{k} {v / self.n:.1f}x" for k, v in self.contagens.items())
+            self.contagens = {}
+            print(f"[tempo] {self.n / (time.time() - self.inicio):.1f} análises/s | {partes}")
             self.somas, self.n, self.inicio = {}, 0, time.time()
 
 
-def trabalhador(monitor, estado, cfg):
-    detectores = criar_detectores(cfg)
-    for d in detectores:
-        print(f"Detector '{d.nome}' usando {getattr(d, 'dispositivo', '?')}")
-    medidor = Medidor()
-    palavras = [p.lower() for p in cfg["palavras_titulo"]]
-    ultimo_achado = 0.0
-    ultimo_log = ""
-    with mss.MSS() as sct:
-        while estado.rodando:
+class Trabalhador:
+    """Laço de captura + detecção. Roda numa thread separada do overlay."""
+
+    def __init__(self, monitor, estado, cfg):
+        self.monitor, self.estado, self.cfg = monitor, estado, cfg
+        self.palavras = [p.lower() for p in cfg["palavras_titulo"]]
+        self.ultimo_achado = 0.0
+        self.ultimo_log = ""
+        self.ultimo_titulo_ruim = None
+        self.parados = 0
+        self.suspeito_ate = 0.0
+
+    def rodar(self):
+        self.detectores = criar_detectores(self.cfg)
+        for d in self.detectores:
+            print(f"Detector '{d.nome}' usando {getattr(d, 'dispositivo', '?')}")
+        self.captura = Captura(self.monitor)
+        print("Captura de tela:", self.captura.metodo)
+        self.medidor = Medidor()
+        while self.estado.rodando:
             try:
-                ultimo_achado, ultimo_log = ciclo(sct, monitor, estado, cfg, detectores,
-                                                  medidor, palavras, ultimo_achado, ultimo_log)
+                self.ciclo()
             except Exception as e:
                 print("Erro no ciclo:", repr(e))
                 time.sleep(1)
 
+    def ciclo(self):
+        cfg, estado = self.cfg, self.estado
+        t0 = time.perf_counter()
+        frame, mudou = self.captura.pegar()
+        H, W = frame.shape[:2]
+        t1 = time.perf_counter()
 
-def ciclo(sct, monitor, estado, cfg, detectores, medidor, palavras,
-          ultimo_achado, ultimo_log):
-    debug = cfg["debug"]
-    t0 = time.perf_counter()
-    frame = np.ascontiguousarray(np.array(sct.grab(monitor))[:, :, :3])
-    H, W = frame.shape[:2]
-    t1 = time.perf_counter()
+        titulo = titulo_janela()
+        titulo_ruim = any(p in titulo for p in self.palavras) or time.time() < estado.ocr_ate
+        if not mudou and titulo_ruim == self.ultimo_titulo_ruim:
+            # tela parada: mantém o que está e não gasta CPU/GPU
+            self.parados += 1
+            if estado.patches:
+                self.ultimo_achado = time.time()
+            self.dormir(t0)
+            return
+        self.ultimo_titulo_ruim = titulo_ruim
 
-    titulo = titulo_janela()
-    titulo_ruim = any(p in titulo for p in palavras) or time.time() < estado.ocr_ate
-    achados = []
-    if not titulo_ruim:
-        try:
-            imagens = regioes.regioes_de_imagem(frame)
-            for d in detectores:
-                achados += d.analisar(frame, imagens)
-        except Exception as e:
-            print("Erro na detecção:", e)
-    t2 = time.perf_counter()
+        achados = []
+        if not titulo_ruim:
+            try:
+                imagens = regioes.regioes_de_imagem(frame)
+                for d in self.detectores:
+                    achados += d.analisar(frame, imagens)
+            except Exception as e:
+                print("Erro na detecção:", repr(e))
+        t2 = time.perf_counter()
 
-    if debug:
+        if cfg["debug"]:
+            self.logar(achados, titulo, titulo_ruim, W, H)
+        if titulo_ruim or any(a.pontos >= 0.4 for a in achados):
+            self.suspeito_ate = time.time() + 3  # analisa mais rápido por 3 s
+
+        novos = []
+        m = cfg["margem"]
+        for a in achados:
+            if not a.bloquear:
+                continue
+            x1, y1, x2, y2 = a.box
+            mx, my = (x2 - x1) * m / 2, (y2 - y1) * m / 2
+            x1, y1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
+            x2, y2 = int(min(W, x2 + mx)), int(min(H, y2 + my))
+            if x2 - x1 >= 4 and y2 - y1 >= 4:
+                novos.append((x1, y1, mosaico(frame, x1, y1, x2, y2, cfg["bloco"])))
+        if titulo_ruim or (novos and cfg["modo"] == "tela"):
+            novos = [(0, 0, mosaico(frame, 0, 0, W, H, cfg["bloco_tela"]))]
+
+        agora = time.time()
+        with estado.lock:
+            if novos:
+                estado.patches = novos
+                estado.versao += 1
+                self.ultimo_achado = agora
+            elif estado.patches and agora - self.ultimo_achado > cfg["persistencia"]:
+                estado.patches = []
+                estado.versao += 1
+
+        t3 = time.perf_counter()
+        if cfg["debug"]:
+            self.medidor.add(captura=t1 - t0, ia=t2 - t1, mosaico=t3 - t2,
+                             total=t3 - t0, parados=self.parados)
+            self.parados = 0
+            for d in self.detectores:
+                if hasattr(d, "cache_det"):
+                    self.medidor.contar(nudenet=d.cache_det.execucoes,
+                                        classificador=d.cache_clf.execucoes)
+                    d.cache_det.execucoes = d.cache_clf.execucoes = 0
+        self.dormir(t0)
+
+    def dormir(self, t0):
+        intervalo = self.cfg["intervalo_rapido" if time.time() < self.suspeito_ate
+                             else "intervalo"]
+        resto = intervalo - (time.perf_counter() - t0)
+        if resto > 0:
+            time.sleep(resto)
+
+    def logar(self, achados, titulo, titulo_ruim, W, H):
         linhas = [f"  {a.origem} {a.pontos:.2f} {'BLOQUEIA' if a.bloquear else 'ok'}"
                   f" {tuple(int(v) for v in a.box)} | {' | '.join(a.detalhes)}"
                   for a in sorted(achados, key=lambda a: -a.pontos)
@@ -210,42 +286,10 @@ def ciclo(sct, monitor, estado, cfg, detectores, medidor, palavras,
         log = "\n".join(linhas)
         if titulo_ruim:
             log = "  título/texto proibido: " + titulo[:60]
-        if log and log != ultimo_log:
+        if log and log != self.ultimo_log:
             print(time.strftime("%H:%M:%S"), f"[{W}x{H}] janela: {titulo[:50]!r}")
             print(log)
-        ultimo_log = log
-
-    novos = []
-    m = cfg["margem"]
-    for a in achados:
-        if not a.bloquear:
-            continue
-        x1, y1, x2, y2 = a.box
-        mx, my = (x2 - x1) * m / 2, (y2 - y1) * m / 2
-        x1, y1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
-        x2, y2 = int(min(W, x2 + mx)), int(min(H, y2 + my))
-        if x2 - x1 >= 4 and y2 - y1 >= 4:
-            novos.append((x1, y1, mosaico(frame, x1, y1, x2, y2, cfg["bloco"])))
-    if titulo_ruim or (novos and cfg["modo"] == "tela"):
-        novos = [(0, 0, mosaico(frame, 0, 0, W, H, cfg["bloco_tela"]))]
-
-    agora = time.time()
-    with estado.lock:
-        if novos:
-            estado.patches = novos
-            estado.versao += 1
-            ultimo_achado = agora
-        elif estado.patches and agora - ultimo_achado > cfg["persistencia"]:
-            estado.patches = []
-            estado.versao += 1
-
-    t3 = time.perf_counter()
-    if debug:
-        medidor.add(captura=t1 - t0, ia=t2 - t1, mosaico=t3 - t2, total=t3 - t0)
-    resto = cfg["intervalo"] - (t3 - t0)
-    if resto > 0:
-        time.sleep(resto)
-    return ultimo_achado, ultimo_log
+        self.ultimo_log = log
 
 
 def vigiar_ocr(monitor, estado, cfg):
@@ -360,7 +404,7 @@ def main():
     overlay = Overlay(monitor["left"], monitor["top"],
                       monitor["width"], monitor["height"])
     estado = Estado()
-    threading.Thread(target=trabalhador, args=(monitor, estado, cfg),
+    threading.Thread(target=Trabalhador(monitor, estado, cfg).rodar,
                      daemon=True).start()
     threading.Thread(target=vigiar_hosts, args=(estado, cfg), daemon=True).start()
     threading.Thread(target=vigiar_guardiao, args=(estado,), daemon=True).start()
