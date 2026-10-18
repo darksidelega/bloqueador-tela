@@ -3,44 +3,43 @@
 Cobre conteúdo sensível com mosaico, em qualquer app. A IA roda 100% local:
 nenhuma imagem da tela sai do PC.
 
-## Instalar e usar
-1. `1_instalar.bat`: cria o `.venv`, instala tudo e baixa os modelos (~550 MB).
-2. `2_iniciar.bat`: inicia o bloqueador (sem janela; o DEBUG vai para `logs/bloqueador.log`, abra com `ver_log.bat`).
-3. `4_ativar_protecao.bat` (admin): define a senha, inicia com o Windows,
-   reinicia sozinho se for fechado e bloqueia os sites.
-4. `Ctrl+Alt+Shift+Q`: pede a senha e pausa por N minutos.
-5. `5_desativar_protecao.bat` (pede a senha): remove tudo.
+## Usar
+- **Instalar.bat**: instala tudo, baixa os modelos (~550 MB), liga o início
+  com o Windows e abre o Painel. Só precisa rodar uma vez.
+- **Painel.bat**: status, liga/desliga das proteções, sensibilidade, senha,
+  pausa, lista de sites e log.
+- **Ctrl + Alt + Shift + Q**: pausa sem abrir o painel (pede a senha).
 
-Log: `logs/bloqueador.log`.
+Com senha definida, o painel fica travado: mudar ajustes, pausar ou desligar
+pede a senha.
 
-## Como decide (config.json)
+## Pastas
+| Pasta | O que tem |
+|---|---|
+| `app/` | código (motor `bloqueador_tela.py`, `guardiao.py`, `painel.py`, `admin.py`) |
+| `dados/` | `config.json`, `sites_bloqueados.txt`, senha (só o hash), status |
+| `modelos/` | modelos de IA (NudeNet + classificador NSFW) |
+| `logs/` | `bloqueador.log` (palavras proibidas aparecem mascaradas, ex: `p**n`) |
+
+## Como liga sozinho
+- **Iniciar com o Windows** (padrão, sem admin): ao entrar no PC sobe o
+  guardião, que mantém o bloqueador aberto e o reabre em segundos se fechar.
+- **Proteção forte** (opcional, admin): tarefa do Windows que reabre o
+  guardião em até 1 min se ele for fechado.
+
+## Como decide (dados/config.json)
 Para cada imagem/vídeo na tela:
 
     pontos = NSFW * peso_classificador + Σ (maior score da classe * pesos[classe])
 
-Bloqueia se `pontos >= limiar_bloqueio` (1.0).
-- `NSFW` = classificador da imagem inteira (pega mão cobrindo, sem rosto).
-- Classes = NudeNet 640m (partes do corpo), rodando em fatias para achar miniaturas.
-- `MALE_BREAST_EXPOSED` tem peso negativo (lutador sem camisa).
-- Contexto masculino (peito/rosto de homem e nenhum rosto feminino): peitoral não
-  conta como peito feminino e não bloqueia, a não ser com genitália visível.
-- Classificador sozinho (sem rosto feminino/peito/nádega/genitália) fica limitado a
-  `teto_classificador_sozinho` (não bloqueia sozinho).
-- Peito feminino sozinho fica limitado a `teto_peito_sozinho` (< 1, então não bloqueia sozinho).
-- Se o classificador tem certeza que é normal (`< veto_classificador`), o NudeNet vale `fator_veto`.
-
-Bloqueando pouco: baixe `limiar_bloqueio` ou suba o peso da classe que aparece no log.
-Falso positivo: faça o contrário com a classe que aparece no log.
-
-## Outras camadas
-- `sites_bloqueados.txt`: domínios bloqueados pelo arquivo hosts (`3_bloquear_sites.bat`).
-- `forcar_safesearch`: Google/Bing/DuckDuckGo sempre com SafeSearch.
-- `palavras_titulo` e `ocr.palavras`: palavras no título da aba ou visíveis na janela,
-  só quando a janela ativa é um navegador (`so_navegador`, lista `navegadores`).
-
-## Visual
-- `modo`: `"parte"` cobre só a área (padrão) | `"tela"` cobre tudo.
-- `margem`: aumenta a área coberta; `suavizar_px`: borda suave (feather).
+Bloqueia se `pontos >= limiar_bloqueio` (no painel: "Sensibilidade").
+- Miniaturas (Google Imagens) são separadas e pontuadas uma a uma.
+- Contexto masculino (peito/rosto de homem, nenhum rosto feminino): peitoral
+  não conta e não bloqueia, a não ser com genitália visível (lutadores).
+- Classificador sozinho, sem sinal de corpo, não bloqueia (`teto_classificador_sozinho`).
+- Título da aba e OCR só valem quando a janela ativa é um navegador.
+- No blur de tela inteira, as abas/botões da janela e a barra de tarefas
+  ficam livres para você fechar (`faixa_livre_px`, `liberar_barra_tarefas`).
 
 ## Gore (futuro)
-Veja `bloqueador/detectores/gore.py`: é só plugar um classificador ONNX.
+Veja `app/bloqueador/detectores/gore.py`: é só plugar um classificador ONNX.
