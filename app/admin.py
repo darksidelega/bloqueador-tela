@@ -9,7 +9,7 @@ from bloqueador import config, protecao, sites
 
 
 def hosts_aplicar():
-    cfg = config.carregar()
+    cfg = protecao.config_efetivo()
     sites.aplicar(config.caminho(cfg["sites_bloqueados"]), cfg["forcar_safesearch"],
                   cfg["bloquear_sites"])
 
@@ -25,6 +25,9 @@ if __name__ == "__main__":
     os.chdir(config.PASTA)
     if not sites.eh_admin():
         sys.exit(2)
+    if protecao.restrito_ativo() and any(a in ("hosts_remover", "tarefa_remover")
+                                         for a in sys.argv[1:]):
+        sys.exit(3)  # modo restrito: não tira bloqueio nem rodando direto
     try:
         for acao in sys.argv[1:]:
             ACOES[acao]()
