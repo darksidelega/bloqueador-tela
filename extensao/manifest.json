@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Bloqueador de Tela — vídeos curtos",
+  "version": "1.0",
+  "description": "Esconde Shorts (YouTube), Reels (Instagram) e o feed Para Você (TikTok). Controlado pelo app Bloqueador de Tela.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr5566xxv03MIwfeGXbpSpuVA7Cb8gBk1I9hzQQmZN2dsp5dBeWOt11Vti+g/XiJzoAyd6i7wvTJt3fXKcuGP6Sc6qLR15Vc0ni7KmBir8aNQpY28iKHkYPE7TjMXPLkVf2hoztqZv63L4CQPjxi6AJbvR/zJrA/6LOgBjZ17fdoxq7X5mCfg6Vvp3R7aJbiwMfWG21DgggKRqAWDpj4CLah1AhD/YSa7bZxIkCDHS9Yhq3LqDbekplovOeCDeqRVo7RwiNhV3y1clwe5ciANO8kUn34wbTX1ovjcq5q++Qmyx2zSRWzk3t4QA5CBUIuGkfK+PjjilvebdvE6bmRHzwIDAQAB",
+  "permissions": ["nativeMessaging", "storage", "alarms"],
+  "background": { "service_worker": "fundo.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://*.instagram.com/*",
+        "*://*.tiktok.com/*"
+      ],
+      "js": ["conteudo.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

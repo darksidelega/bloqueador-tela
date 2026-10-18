@@ -14,3 +14,7 @@ status.json
 chave.bin
 restrito.json
 boas_vindas.json
+config_restrito.json
+extensao_chave.pem
+host_curtos.json
+host_curtos.bat
