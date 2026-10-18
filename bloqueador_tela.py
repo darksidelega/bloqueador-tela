@@ -5,7 +5,7 @@ Captura a tela, detecta nudez com IA local (NudeNet + classificador NSFW)
 e cobre com mosaico, em qualquer navegador ou app.
 Ajustes: config.json (criado na primeira execução).
 
-Sair: Ctrl + Alt + Shift + Q
+Fechar/pausar: Ctrl + Alt + Shift + Q (pede a senha, se houver)
 """
 import ctypes
 import os
@@ -19,7 +19,7 @@ import mss
 import numpy as np
 from PIL import Image, ImageTk
 
-from bloqueador import config, ocr, regioes, sites
+from bloqueador import config, ocr, protecao, regioes, sites
 from bloqueador.detectores import criar_detectores
 
 user32 = ctypes.windll.user32 if os.name == "nt" else None
@@ -291,12 +291,67 @@ def vigiar_hosts(estado, cfg):
         time.sleep(60)
 
 
+def vigiar_guardiao(estado):
+    """Se a proteção está instalada e alguém matar o guardião, sobe de novo."""
+    if not protecao.tarefa_existe():
+        return
+    while estado.rodando:
+        time.sleep(10)
+        if estado.rodando and not protecao.esta_rodando("guardiao"):
+            print("Guardião não está rodando; iniciando.")
+            try:
+                protecao.iniciar_guardiao()
+            except Exception as e:
+                print("Erro ao iniciar guardião:", e)
+
+
+def janela_senha(root, ao_confirmar):
+    """Pede a senha e por quantos minutos pausar."""
+    jan = tk.Toplevel(root)
+    jan.title("Bloqueador - pausar")
+    jan.attributes("-topmost", True)
+    jan.resizable(False, False)
+    tk.Label(jan, text="Senha:").grid(row=0, column=0, padx=8, pady=6, sticky="e")
+    senha = tk.Entry(jan, show="*", width=24)
+    senha.grid(row=0, column=1, padx=8, pady=6)
+    tk.Label(jan, text="Pausar por (min):").grid(row=1, column=0, padx=8, sticky="e")
+    minutos = tk.Spinbox(jan, from_=5, to=1440, increment=5, width=6)
+    minutos.delete(0, "end")
+    minutos.insert(0, "60")
+    minutos.grid(row=1, column=1, padx=8, sticky="w")
+    aviso = tk.Label(jan, text="", fg="red")
+    aviso.grid(row=2, column=0, columnspan=2)
+
+    def ok(_=None):
+        if protecao.verificar_senha(senha.get()):
+            try:
+                m = max(1, int(minutos.get()))
+            except ValueError:
+                m = 60
+            jan.destroy()
+            ao_confirmar(m)
+        else:
+            senha.delete(0, "end")
+            aviso.config(text="Senha errada")
+
+    tk.Button(jan, text="Pausar", command=ok).grid(row=3, column=0, columnspan=2, pady=8)
+    jan.bind("<Return>", ok)
+    jan.bind("<Escape>", lambda _: jan.destroy())
+    jan.after(60_000, lambda: jan.winfo_exists() and jan.destroy())
+    jan.focus_force()
+    senha.focus_set()
+    return jan
+
+
 def main():
     if os.name != "nt":
         print("Este app é só para Windows.")
         sys.exit(1)
 
+    if not protecao.instancia_unica("app"):
+        return  # já tem um bloqueador rodando
     configurar_log()
+    protecao.cancelar_pausa()  # abriu o app = quer proteção agora
     cfg = config.carregar()
     tornar_dpi_aware()
     with mss.MSS() as sct:
@@ -308,20 +363,30 @@ def main():
     threading.Thread(target=trabalhador, args=(monitor, estado, cfg),
                      daemon=True).start()
     threading.Thread(target=vigiar_hosts, args=(estado, cfg), daemon=True).start()
+    threading.Thread(target=vigiar_guardiao, args=(estado,), daemon=True).start()
     if cfg["ocr"]["ativo"]:
         threading.Thread(target=vigiar_ocr, args=(monitor, estado, cfg),
                          daemon=True).start()
 
     ultima_versao = [-1]
+    dialogo = [None]
+
+    def fechar(minutos):
+        protecao.pausar(minutos)
+        print(f"Pausado por {minutos} min.")
+        estado.rodando = False
+        overlay.root.destroy()
 
     def atualizar():
-        # Ctrl + Alt + Shift + Q para sair
+        # Ctrl + Alt + Shift + Q: pede senha para pausar/fechar
         teclas = [user32.GetAsyncKeyState(k) & 0x8000
                   for k in (0x11, 0x12, 0x10, 0x51)]
         if all(teclas):
-            estado.rodando = False
-            overlay.root.destroy()
-            return
+            if not protecao.tem_senha():
+                fechar(60)
+                return
+            if dialogo[0] is None or not dialogo[0].winfo_exists():
+                dialogo[0] = janela_senha(overlay.root, fechar)
         with estado.lock:
             patches = list(estado.patches)
             versao = estado.versao
@@ -330,7 +395,7 @@ def main():
             overlay.desenhar(patches)
         overlay.root.after(60, atualizar)
 
-    print("Bloqueador ativo. Para sair: Ctrl + Alt + Shift + Q")
+    print("Bloqueador ativo. Para pausar/fechar: Ctrl + Alt + Shift + Q")
     overlay.root.after(60, atualizar)
     overlay.root.mainloop()
 

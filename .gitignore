@@ -7,3 +7,6 @@ build/
 logs/
 .venv/
 config.json
+senha.json
+pausa.json
+tarefa.xml
