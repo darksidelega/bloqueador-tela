@@ -1,15 +1,15 @@
 """
 Bloqueador de conteúdo sensível para Windows (estilo mosaico de TV japonesa).
 
-Captura a tela, detecta nudez com IA (NudeNet) e cobre só a área
-detectada com um mosaico, em qualquer navegador ou app.
+Captura a tela, detecta nudez com IA local (NudeNet + classificador NSFW)
+e cobre com mosaico, em qualquer navegador ou app.
+Ajustes: config.json (criado na primeira execução).
 
 Sair: Ctrl + Alt + Shift + Q
 """
 import ctypes
 import os
 import sys
-import tempfile
 import threading
 import time
 import tkinter as tk
@@ -17,36 +17,10 @@ import tkinter as tk
 import cv2
 import mss
 import numpy as np
-from nudenet import NudeDetector
 from PIL import Image, ImageTk
 
-# ---------------- Configurações ----------------
-# Classe -> pontuação mínima para bloquear (menor = bloqueia mais fácil).
-# "EXPOSED" = parte à mostra; "COVERED" = coberta (mão, roupa íntima).
-# Homens sem camisa (UFC) NÃO ativam: MALE_BREAST não está na lista.
-CLASSES_BLOQUEAR = {
-    "FEMALE_BREAST_EXPOSED": 0.45,      # alto para não pegar peito de homem (UFC)
-    "FEMALE_GENITALIA_EXPOSED": 0.22,
-    "MALE_GENITALIA_EXPOSED": 0.30,
-    "ANUS_EXPOSED": 0.30,
-    "BUTTOCKS_EXPOSED": 0.50,
-    "FEMALE_GENITALIA_COVERED": 0.55,   # pega mão/roupa cobrindo
-}
-# Se o título da janela/aba ativa tiver alguma dessas palavras, cobre a tela.
-PALAVRAS_TITULO = [
-    "porn", "pornô", "xxx", "xvideos", "xnxx", "xhamster", "redtube",
-    "youporn", "hentai", "nsfw", "onlyfans", "putaria", "brazzers",
-    "chaturbate", "nudes", "sexo explícito",
-]
-USAR_FATIAS = True   # analisa a tela em pedaços também (acha imagens pequenas)
-DEBUG = True         # mostra no cmd o que foi detectado e a pontuação
-MODO = "tela"        # "tela" = cobre a tela inteira | "parte" = só a área detectada
-BLOCO_TELA = 45      # tamanho do mosaico no modo "tela" (maior = mais borrado)
-INTERVALO = 0.12     # segundos entre análises
-MARGEM = 0.30        # aumenta a caixa do mosaico em 30%
-BLOCO = 14           # tamanho do "pixelão" do mosaico
-PERSISTENCIA = 0.7   # segundos mantendo o mosaico após sumir a detecção
-# -----------------------------------------------
+from bloqueador import config, regioes
+from bloqueador.detectores import criar_detectores
 
 user32 = ctypes.windll.user32 if os.name == "nt" else None
 
@@ -98,43 +72,7 @@ class Overlay:
             self.canvas.create_image(x, y, image=foto, anchor="nw")
 
 
-class Detector:
-    def __init__(self):
-        self.det = NudeDetector()
-        self.usar_array = True
-
-    def detectar(self, frame):
-        if self.usar_array:
-            try:
-                return self.det.detect(frame)
-            except Exception:
-                self.usar_array = False
-        caminho = os.path.join(tempfile.gettempdir(), "_bt_frame.jpg")
-        cv2.imwrite(caminho, frame)
-        return self.det.detect(caminho)
-
-    def detectar_tudo(self, frame):
-        """Analisa a tela inteira e, opcionalmente, 4 pedaços sobrepostos
-        (o modelo enxerga em baixa resolução, então pedaços acham mais coisas)."""
-        H, W = frame.shape[:2]
-        regioes = [(0, 0, W, H)]
-        if USAR_FATIAS:
-            tw, th = int(W * 0.6), int(H * 0.6)
-            for x0 in (0, W - tw):
-                for y0 in (0, H - th):
-                    regioes.append((x0, y0, tw, th))
-        saida = []
-        for x0, y0, tw, th in regioes:
-            pedaco = np.ascontiguousarray(frame[y0:y0 + th, x0:x0 + tw])
-            for r in self.detectar(pedaco):
-                x, y, w, h = r["box"]
-                saida.append({"class": r["class"], "score": r["score"],
-                              "box": [x + x0, y + y0, w, h]})
-        return saida
-
-
-def mosaico(frame, x1, y1, x2, y2, bloco=None):
-    bloco = bloco or BLOCO
+def mosaico(frame, x1, y1, x2, y2, bloco):
     recorte = frame[y1:y2, x1:x2]
     h, w = recorte.shape[:2]
     pequeno = cv2.resize(recorte, (max(1, w // bloco), max(1, h // bloco)),
@@ -143,18 +81,15 @@ def mosaico(frame, x1, y1, x2, y2, bloco=None):
     return Image.fromarray(cv2.cvtColor(grande, cv2.COLOR_BGR2RGB))
 
 
-def titulo_bloqueado():
-    """True se o título da janela ativa (inclui a aba do navegador) tiver
-    alguma palavra proibida."""
+def titulo_janela():
     try:
         hwnd = user32.GetForegroundWindow()
         n = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(n + 1)
         user32.GetWindowTextW(hwnd, buf, n + 1)
-        titulo = buf.value.lower()
+        return buf.value.lower()
     except Exception:
-        return False
-    return any(p in titulo for p in PALAVRAS_TITULO)
+        return ""
 
 
 class Estado:
@@ -165,45 +100,80 @@ class Estado:
         self.rodando = True
 
 
-def trabalhador(monitor, estado):
-    detector = Detector()
+class Medidor:
+    """Média do tempo por ciclo, impressa a cada N segundos."""
+
+    def __init__(self, a_cada=5.0):
+        self.a_cada = a_cada
+        self.somas = {}
+        self.n = 0
+        self.inicio = time.time()
+
+    def add(self, **tempos):
+        for k, v in tempos.items():
+            self.somas[k] = self.somas.get(k, 0) + v
+        self.n += 1
+        if time.time() - self.inicio >= self.a_cada:
+            partes = " | ".join(f"{k} {v / self.n * 1000:.0f}ms"
+                                for k, v in self.somas.items())
+            print(f"[tempo] {self.n / (time.time() - self.inicio):.1f} ciclos/s | {partes}")
+            self.somas, self.n, self.inicio = {}, 0, time.time()
+
+
+def trabalhador(monitor, estado, cfg):
+    debug = cfg["debug"]
+    detectores = criar_detectores(cfg)
+    for d in detectores:
+        print(f"Detector '{d.nome}' usando {getattr(d, 'dispositivo', '?')}")
+    medidor = Medidor()
+    palavras = [p.lower() for p in cfg["palavras_titulo"]]
     ultimo_achado = 0.0
-    with mss.mss() as sct:
+    ultimo_log = ""
+    with mss.MSS() as sct:
         while estado.rodando:
-            inicio = time.time()
-            shot = sct.grab(monitor)
-            frame = np.ascontiguousarray(np.array(shot)[:, :, :3])
+            t0 = time.perf_counter()
+            frame = np.ascontiguousarray(np.array(sct.grab(monitor))[:, :, :3])
             H, W = frame.shape[:2]
+            t1 = time.perf_counter()
+
+            titulo = titulo_janela()
+            titulo_ruim = any(p in titulo for p in palavras)
+            achados = []
+            if not titulo_ruim:
+                try:
+                    imagens = regioes.regioes_de_imagem(frame)
+                    for d in detectores:
+                        achados += d.analisar(frame, imagens)
+                except Exception as e:
+                    print("Erro na detecção:", e)
+            t2 = time.perf_counter()
+
+            if debug:
+                linhas = [f"  {a.origem} {a.pontos:.2f} {'BLOQUEIA' if a.bloquear else 'ok'}"
+                          f" {tuple(int(v) for v in a.box)} | {' | '.join(a.detalhes)}"
+                          for a in sorted(achados, key=lambda a: -a.pontos)
+                          if a.pontos >= 0.3 or a.bloquear]
+                log = "\n".join(linhas)
+                if titulo_ruim:
+                    log = "  título proibido: " + titulo[:60]
+                if log and log != ultimo_log:
+                    print(time.strftime("%H:%M:%S"), f"[{W}x{H}] janela: {titulo[:50]!r}")
+                    print(log)
+                ultimo_log = log
 
             novos = []
-            titulo_ruim = titulo_bloqueado()
-            try:
-                resultados = [] if titulo_ruim else detector.detectar_tudo(frame)
-            except Exception as e:
-                print("Erro na detecção:", e)
-                resultados = []
-
-            if DEBUG:
-                vistos = [f'{r["class"]} {r["score"]:.2f}' for r in resultados
-                          if r["score"] >= 0.15 and not r["class"].startswith(
-                              ("FACE", "FEET", "ARMPITS", "BELLY"))]
-                if vistos:
-                    print(time.strftime("%H:%M:%S"), " | ".join(vistos))
-
-            for r in resultados:
-                limite = CLASSES_BLOQUEAR.get(r["class"])
-                if limite is None or r["score"] < limite:
+            m = cfg["margem"]
+            for a in achados:
+                if not a.bloquear:
                     continue
-                x, y, w, h = r["box"]
-                mx, my = w * MARGEM, h * MARGEM
-                x1 = int(max(0, x - mx)); y1 = int(max(0, y - my))
-                x2 = int(min(W, x + w + mx)); y2 = int(min(H, y + h + my))
-                if x2 - x1 < 4 or y2 - y1 < 4:
-                    continue
-                novos.append((x1, y1, mosaico(frame, x1, y1, x2, y2)))
-
-            if titulo_ruim or (novos and MODO == "tela"):
-                novos = [(0, 0, mosaico(frame, 0, 0, W, H, BLOCO_TELA))]
+                x1, y1, x2, y2 = a.box
+                mx, my = (x2 - x1) * m / 2, (y2 - y1) * m / 2
+                x1, y1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
+                x2, y2 = int(min(W, x2 + mx)), int(min(H, y2 + my))
+                if x2 - x1 >= 4 and y2 - y1 >= 4:
+                    novos.append((x1, y1, mosaico(frame, x1, y1, x2, y2, cfg["bloco"])))
+            if titulo_ruim or (novos and cfg["modo"] == "tela"):
+                novos = [(0, 0, mosaico(frame, 0, 0, W, H, cfg["bloco_tela"]))]
 
             agora = time.time()
             with estado.lock:
@@ -211,11 +181,14 @@ def trabalhador(monitor, estado):
                     estado.patches = novos
                     estado.versao += 1
                     ultimo_achado = agora
-                elif estado.patches and agora - ultimo_achado > PERSISTENCIA:
+                elif estado.patches and agora - ultimo_achado > cfg["persistencia"]:
                     estado.patches = []
                     estado.versao += 1
 
-            resto = INTERVALO - (time.time() - inicio)
+            t3 = time.perf_counter()
+            if debug:
+                medidor.add(captura=t1 - t0, ia=t2 - t1, mosaico=t3 - t2, total=t3 - t0)
+            resto = cfg["intervalo"] - (t3 - t0)
             if resto > 0:
                 time.sleep(resto)
 
@@ -225,14 +198,15 @@ def main():
         print("Este app é só para Windows.")
         sys.exit(1)
 
+    cfg = config.carregar()
     tornar_dpi_aware()
-    with mss.mss() as sct:
+    with mss.MSS() as sct:
         monitor = dict(sct.monitors[1])  # monitor principal
 
     overlay = Overlay(monitor["left"], monitor["top"],
                       monitor["width"], monitor["height"])
     estado = Estado()
-    threading.Thread(target=trabalhador, args=(monitor, estado),
+    threading.Thread(target=trabalhador, args=(monitor, estado, cfg),
                      daemon=True).start()
 
     ultima_versao = [-1]

@@ -1,4 +1,4 @@
-nudenet
+onnxruntime-directml
 mss
 pillow
 numpy
