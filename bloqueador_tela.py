@@ -19,7 +19,7 @@ import mss
 import numpy as np
 from PIL import Image, ImageTk
 
-from bloqueador import config, regioes, sites
+from bloqueador import config, ocr, regioes, sites
 from bloqueador.detectores import criar_detectores
 
 user32 = ctypes.windll.user32 if os.name == "nt" else None
@@ -92,12 +92,56 @@ def titulo_janela():
         return ""
 
 
+class Saida:
+    """Escreve no console (se houver) e em logs/bloqueador.log."""
+
+    lock = threading.Lock()
+    local = threading.local()
+
+    def __init__(self, console, caminho):
+        self.console = console
+        self.arq = open(caminho, "a", encoding="utf-8", buffering=1)
+
+    def write(self, txt):
+        # junta por linha e por thread (senão threads misturam as linhas)
+        buf = getattr(self.local, "buf", "") + txt
+        if "\n" not in buf:
+            self.local.buf = buf
+            return
+        corte = buf.rindex("\n") + 1
+        self.local.buf, txt = buf[corte:], buf[:corte]
+        with self.lock:
+            self.arq.write(txt)
+            if self.console:
+                try:
+                    self.console.write(txt)
+                except UnicodeEncodeError:
+                    self.console.write(txt.encode("ascii", "replace").decode())
+                self.console.flush()
+
+    def flush(self):
+        self.arq.flush()
+        if self.console:
+            self.console.flush()
+
+
+def configurar_log():
+    pasta = config.caminho("logs")
+    os.makedirs(pasta, exist_ok=True)
+    arq = os.path.join(pasta, "bloqueador.log")
+    if os.path.isfile(arq) and os.path.getsize(arq) > 5_000_000:
+        os.replace(arq, arq + ".old")
+    sys.stdout = Saida(sys.stdout, arq)
+    sys.stderr = Saida(sys.stderr, arq)
+
+
 class Estado:
     def __init__(self):
         self.patches = []
         self.versao = 0
         self.lock = threading.Lock()
         self.rodando = True
+        self.ocr_ate = 0.0      # cobre a tela até este horário (OCR achou palavra)
 
 
 class Medidor:
@@ -121,7 +165,6 @@ class Medidor:
 
 
 def trabalhador(monitor, estado, cfg):
-    debug = cfg["debug"]
     detectores = criar_detectores(cfg)
     for d in detectores:
         print(f"Detector '{d.nome}' usando {getattr(d, 'dispositivo', '?')}")
@@ -131,66 +174,106 @@ def trabalhador(monitor, estado, cfg):
     ultimo_log = ""
     with mss.MSS() as sct:
         while estado.rodando:
-            t0 = time.perf_counter()
-            frame = np.ascontiguousarray(np.array(sct.grab(monitor))[:, :, :3])
-            H, W = frame.shape[:2]
-            t1 = time.perf_counter()
+            try:
+                ultimo_achado, ultimo_log = ciclo(sct, monitor, estado, cfg, detectores,
+                                                  medidor, palavras, ultimo_achado, ultimo_log)
+            except Exception as e:
+                print("Erro no ciclo:", repr(e))
+                time.sleep(1)
 
+
+def ciclo(sct, monitor, estado, cfg, detectores, medidor, palavras,
+          ultimo_achado, ultimo_log):
+    debug = cfg["debug"]
+    t0 = time.perf_counter()
+    frame = np.ascontiguousarray(np.array(sct.grab(monitor))[:, :, :3])
+    H, W = frame.shape[:2]
+    t1 = time.perf_counter()
+
+    titulo = titulo_janela()
+    titulo_ruim = any(p in titulo for p in palavras) or time.time() < estado.ocr_ate
+    achados = []
+    if not titulo_ruim:
+        try:
+            imagens = regioes.regioes_de_imagem(frame)
+            for d in detectores:
+                achados += d.analisar(frame, imagens)
+        except Exception as e:
+            print("Erro na detecção:", e)
+    t2 = time.perf_counter()
+
+    if debug:
+        linhas = [f"  {a.origem} {a.pontos:.2f} {'BLOQUEIA' if a.bloquear else 'ok'}"
+                  f" {tuple(int(v) for v in a.box)} | {' | '.join(a.detalhes)}"
+                  for a in sorted(achados, key=lambda a: -a.pontos)
+                  if a.pontos >= 0.3 or a.bloquear]
+        log = "\n".join(linhas)
+        if titulo_ruim:
+            log = "  título/texto proibido: " + titulo[:60]
+        if log and log != ultimo_log:
+            print(time.strftime("%H:%M:%S"), f"[{W}x{H}] janela: {titulo[:50]!r}")
+            print(log)
+        ultimo_log = log
+
+    novos = []
+    m = cfg["margem"]
+    for a in achados:
+        if not a.bloquear:
+            continue
+        x1, y1, x2, y2 = a.box
+        mx, my = (x2 - x1) * m / 2, (y2 - y1) * m / 2
+        x1, y1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
+        x2, y2 = int(min(W, x2 + mx)), int(min(H, y2 + my))
+        if x2 - x1 >= 4 and y2 - y1 >= 4:
+            novos.append((x1, y1, mosaico(frame, x1, y1, x2, y2, cfg["bloco"])))
+    if titulo_ruim or (novos and cfg["modo"] == "tela"):
+        novos = [(0, 0, mosaico(frame, 0, 0, W, H, cfg["bloco_tela"]))]
+
+    agora = time.time()
+    with estado.lock:
+        if novos:
+            estado.patches = novos
+            estado.versao += 1
+            ultimo_achado = agora
+        elif estado.patches and agora - ultimo_achado > cfg["persistencia"]:
+            estado.patches = []
+            estado.versao += 1
+
+    t3 = time.perf_counter()
+    if debug:
+        medidor.add(captura=t1 - t0, ia=t2 - t1, mosaico=t3 - t2, total=t3 - t0)
+    resto = cfg["intervalo"] - (t3 - t0)
+    if resto > 0:
+        time.sleep(resto)
+    return ultimo_achado, ultimo_log
+
+
+def vigiar_ocr(monitor, estado, cfg):
+    """Lê o texto da tela a cada poucos segundos e cobre tudo se achar
+    palavra proibida."""
+    oc = cfg["ocr"]
+    try:
+        leitor = ocr.LeitorTela()
+    except Exception as e:
+        print("OCR desligado:", e)
+        return
+    ignorar = [j.lower() for j in oc["ignorar_janelas"]]
+    with mss.MSS() as sct:
+        while estado.rodando:
+            time.sleep(oc["intervalo"])
             titulo = titulo_janela()
-            titulo_ruim = any(p in titulo for p in palavras)
-            achados = []
-            if not titulo_ruim:
-                try:
-                    imagens = regioes.regioes_de_imagem(frame)
-                    for d in detectores:
-                        achados += d.analisar(frame, imagens)
-                except Exception as e:
-                    print("Erro na detecção:", e)
-            t2 = time.perf_counter()
-
-            if debug:
-                linhas = [f"  {a.origem} {a.pontos:.2f} {'BLOQUEIA' if a.bloquear else 'ok'}"
-                          f" {tuple(int(v) for v in a.box)} | {' | '.join(a.detalhes)}"
-                          for a in sorted(achados, key=lambda a: -a.pontos)
-                          if a.pontos >= 0.3 or a.bloquear]
-                log = "\n".join(linhas)
-                if titulo_ruim:
-                    log = "  título proibido: " + titulo[:60]
-                if log and log != ultimo_log:
-                    print(time.strftime("%H:%M:%S"), f"[{W}x{H}] janela: {titulo[:50]!r}")
-                    print(log)
-                ultimo_log = log
-
-            novos = []
-            m = cfg["margem"]
-            for a in achados:
-                if not a.bloquear:
-                    continue
-                x1, y1, x2, y2 = a.box
-                mx, my = (x2 - x1) * m / 2, (y2 - y1) * m / 2
-                x1, y1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
-                x2, y2 = int(min(W, x2 + mx)), int(min(H, y2 + my))
-                if x2 - x1 >= 4 and y2 - y1 >= 4:
-                    novos.append((x1, y1, mosaico(frame, x1, y1, x2, y2, cfg["bloco"])))
-            if titulo_ruim or (novos and cfg["modo"] == "tela"):
-                novos = [(0, 0, mosaico(frame, 0, 0, W, H, cfg["bloco_tela"]))]
-
-            agora = time.time()
-            with estado.lock:
-                if novos:
-                    estado.patches = novos
-                    estado.versao += 1
-                    ultimo_achado = agora
-                elif estado.patches and agora - ultimo_achado > cfg["persistencia"]:
-                    estado.patches = []
-                    estado.versao += 1
-
-            t3 = time.perf_counter()
-            if debug:
-                medidor.add(captura=t1 - t0, ia=t2 - t1, mosaico=t3 - t2, total=t3 - t0)
-            resto = cfg["intervalo"] - (t3 - t0)
-            if resto > 0:
-                time.sleep(resto)
+            if any(j in titulo for j in ignorar):
+                continue
+            try:
+                t0 = time.perf_counter()
+                frame = np.array(sct.grab(monitor))[:, :, :3]
+                achadas = ocr.achar_palavras(leitor.ler(frame), oc["palavras"])
+                if cfg["debug"] and achadas:
+                    print(f"[ocr] {achadas} ({(time.perf_counter() - t0) * 1000:.0f}ms)")
+                if achadas:
+                    estado.ocr_ate = time.time() + oc["persistencia"]
+            except Exception as e:
+                print("Erro no OCR:", e)
 
 
 def vigiar_hosts(estado, cfg):
@@ -213,6 +296,7 @@ def main():
         print("Este app é só para Windows.")
         sys.exit(1)
 
+    configurar_log()
     cfg = config.carregar()
     tornar_dpi_aware()
     with mss.MSS() as sct:
@@ -224,6 +308,9 @@ def main():
     threading.Thread(target=trabalhador, args=(monitor, estado, cfg),
                      daemon=True).start()
     threading.Thread(target=vigiar_hosts, args=(estado, cfg), daemon=True).start()
+    if cfg["ocr"]["ativo"]:
+        threading.Thread(target=vigiar_ocr, args=(monitor, estado, cfg),
+                         daemon=True).start()
 
     ultima_versao = [-1]
 

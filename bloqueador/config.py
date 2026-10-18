@@ -75,8 +75,19 @@ PADRAO = {
         "brazzers", "chaturbate", "nudes", "sexo explícito", "rule34"
     ],
     "ocr": {
-        "ativo": False,
-        "intervalo": 2.0
+        "ativo": True,           # lê o texto da tela (OCR do Windows, local)
+        "intervalo": 2.0,
+        "persistencia": 4.0,     # segundos cobrindo depois de ver a palavra
+        "palavras": [
+            "porn", "pornô", "porno", "pornhub", "xvideos", "xnxx", "xhamster",
+            "redtube", "youporn", "hentai", "brazzers", "onlyfans", "chaturbate",
+            "spankbang", "rule34", "nhentai"
+        ],
+        # janelas onde o OCR não age (ex: você editando esta lista)
+        "ignorar_janelas": [
+            "visual studio code", "bloco de notas", "notepad", "powershell",
+            "prompt de comando", "terminal", "sites_bloqueados", "config.json"
+        ]
     },
     "sites_bloqueados": "sites_bloqueados.txt",
     "forcar_safesearch": True    # Google/Bing/DuckDuckGo sempre com SafeSearch
