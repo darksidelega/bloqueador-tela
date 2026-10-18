@@ -5,7 +5,7 @@ Captura a tela, detecta nudez com IA local (NudeNet + classificador NSFW)
 e cobre com mosaico, em qualquer navegador ou app.
 Ajustes: config.json (criado na primeira execução).
 
-Fechar/pausar: Ctrl + Alt + Shift + Q (pede a senha, se houver)
+Pausar: Ctrl + Alt + Shift + Q (não funciona no modo restrito)
 """
 import ctypes
 import ctypes.wintypes
@@ -282,8 +282,7 @@ class Trabalhador:
 
     def __init__(self, monitor, estado, cfg):
         self.monitor, self.estado, self.cfg = monitor, estado, cfg
-        self.palavras = [p.lower() for p in cfg["palavras_titulo"]]
-        self.ignorar = janelas_ignoradas(cfg)
+        self.recarregar()
         self.ultimo_achado = 0.0
         self.ultimo_log = ""
         self.ultimo_titulo_ruim = None
@@ -293,6 +292,11 @@ class Trabalhador:
         self.analises = 0
         self.ms_total = 0.0
         self.status_em = time.time()
+
+    def recarregar(self):
+        """Recalcula o que depende do config (chamado quando o Painel muda algo)."""
+        self.palavras = [p.lower() for p in self.cfg["palavras_titulo"]]
+        self.ignorar = janelas_ignoradas(self.cfg)
 
     def rodar(self):
         self.detectores = criar_detectores(self.cfg)
@@ -436,18 +440,19 @@ class Trabalhador:
 def vigiar_ocr(monitor, estado, cfg):
     """Lê o texto da tela a cada poucos segundos e cobre tudo se achar
     palavra proibida."""
-    oc = cfg["ocr"]
     try:
         leitor = ocr.LeitorTela()
     except Exception as e:
         print("OCR desligado:", e)
         return
-    ignorar = janelas_ignoradas(cfg)
     with mss.MSS() as sct:
         while estado.rodando:
+            oc = cfg["ocr"]  # relido a cada volta (o Painel pode mudar)
             time.sleep(oc["intervalo"])
+            if not oc["ativo"]:
+                continue
             titulo, processo, (l, t, r, b) = janela_ativa()
-            if not eh_navegador(processo, cfg) or any(j in titulo for j in ignorar):
+            if not eh_navegador(processo, cfg) or                     any(j in titulo for j in janelas_ignoradas(cfg)):
                 continue
             try:
                 t0 = time.perf_counter()
@@ -496,41 +501,43 @@ def vigiar_guardiao(estado):
                 print("Erro ao iniciar guardião:", e)
 
 
-def janela_senha(root, ao_confirmar):
-    """Pede a senha e por quantos minutos pausar."""
+# mudar estas chaves troca os modelos de IA: aí precisa reiniciar o app
+PRECISA_REINICIAR = ("detectores", "dispositivo", "nudenet", "classificador")
+
+
+def janela_pausa(root, ao_confirmar):
+    """Atalho de pausa. No modo restrito só avisa até quando ele vale."""
     jan = tk.Toplevel(root)
-    jan.title("Bloqueador - pausar")
+    jan.title("Bloqueador de Tela")
     jan.attributes("-topmost", True)
     jan.resizable(False, False)
-    tk.Label(jan, text="Senha:").grid(row=0, column=0, padx=8, pady=6, sticky="e")
-    senha = tk.Entry(jan, show="*", width=24)
-    senha.grid(row=0, column=1, padx=8, pady=6)
-    tk.Label(jan, text="Pausar por (min):").grid(row=1, column=0, padx=8, sticky="e")
-    minutos = tk.Spinbox(jan, from_=5, to=1440, increment=5, width=6)
-    minutos.delete(0, "end")
-    minutos.insert(0, "60")
-    minutos.grid(row=1, column=1, padx=8, sticky="w")
-    aviso = tk.Label(jan, text="", fg="red")
-    aviso.grid(row=2, column=0, columnspan=2)
-
-    def ok(_=None):
-        if protecao.verificar_senha(senha.get()):
-            try:
-                m = max(1, int(minutos.get()))
-            except ValueError:
-                m = 60
-            jan.destroy()
-            ao_confirmar(m)
-        else:
-            senha.delete(0, "end")
-            aviso.config(text="Senha errada")
-
-    tk.Button(jan, text="Pausar", command=ok).grid(row=3, column=0, columnspan=2, pady=8)
-    jan.bind("<Return>", ok)
+    jan.configure(bg="white", padx=18, pady=14)
+    try:
+        jan.iconbitmap(os.path.join(config.APP, "recursos", "icone.ico"))
+    except tk.TclError:
+        pass
+    fonte = ("Segoe UI", 11)
+    ate = protecao.restrito_ate()
+    if ate:
+        tk.Label(jan, text="🔒  Modo restrito ativo", font=("Segoe UI", 13, "bold"),
+                 bg="white").pack(anchor="w")
+        tk.Label(jan, text="Não dá para pausar até " +
+                 time.strftime("%d/%m às %H:%M", time.localtime(ate)) + ".",
+                 font=fonte, bg="white").pack(anchor="w", pady=(4, 10))
+        tk.Button(jan, text="Ok", width=10, command=jan.destroy).pack()
+    else:
+        tk.Label(jan, text="Pausar o bloqueador por:", font=("Segoe UI", 13, "bold"),
+                 bg="white").pack(anchor="w", pady=(0, 10))
+        linha = tk.Frame(jan, bg="white")
+        linha.pack()
+        for txt, m in (("15 min", 15), ("30 min", 30), ("1 hora", 60), ("2 horas", 120)):
+            tk.Button(linha, text=txt, width=8, font=fonte,
+                      command=lambda m=m: (jan.destroy(), ao_confirmar(m))).pack(side="left", padx=3)
+        tk.Button(jan, text="Cancelar", font=fonte, relief="flat", bg="white",
+                  command=jan.destroy).pack(pady=(10, 0))
     jan.bind("<Escape>", lambda _: jan.destroy())
     jan.after(60_000, lambda: jan.winfo_exists() and jan.destroy())
     jan.focus_force()
-    senha.focus_set()
     return jan
 
 
@@ -544,6 +551,10 @@ def main():
     os.chdir(config.PASTA)
     configurar_log()
     protecao.cancelar_pausa()  # abriu o app = quer proteção agora
+    try:  # ícone próprio na barra de tarefas (em vez do Python)
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BloqueadorTela.Motor")
+    except Exception:
+        pass
     cfg = config.carregar()
     Saida.palavras = cfg["palavras_titulo"] + cfg["ocr"]["palavras"]
     tornar_dpi_aware()
@@ -553,13 +564,11 @@ def main():
     overlay = Overlay(monitor["left"], monitor["top"],
                       monitor["width"], monitor["height"])
     estado = Estado()
-    threading.Thread(target=Trabalhador(monitor, estado, cfg).rodar,
-                     daemon=True).start()
+    trabalhador = Trabalhador(monitor, estado, cfg)
+    threading.Thread(target=trabalhador.rodar, daemon=True).start()
     threading.Thread(target=vigiar_hosts, args=(estado, cfg), daemon=True).start()
     threading.Thread(target=vigiar_guardiao, args=(estado,), daemon=True).start()
-    if cfg["ocr"]["ativo"]:
-        threading.Thread(target=vigiar_ocr, args=(monitor, estado, cfg),
-                         daemon=True).start()
+    threading.Thread(target=vigiar_ocr, args=(monitor, estado, cfg), daemon=True).start()
 
     ultima_versao = [-1]
     dialogo = [None]
@@ -568,35 +577,40 @@ def main():
     tick = [0]
 
     def fechar(minutos):
-        protecao.pausar(minutos)
+        if not protecao.pausar(minutos):
+            return  # modo restrito ligou no meio tempo
         print(f"Pausado por {minutos} min.")
         estado.rodando = False
         overlay.root.destroy()
 
     def atualizar():
-        # Ctrl + Alt + Shift + Q: pede senha para pausar/fechar
+        # Ctrl + Alt + Shift + Q: pausar (ou aviso do modo restrito)
         teclas = [user32.GetAsyncKeyState(k) & 0x8000
                   for k in (0x11, 0x12, 0x10, 0x51)]
-        if all(teclas):
-            if not protecao.tem_senha():
-                fechar(60)
-                return
-            if dialogo[0] is None or not dialogo[0].winfo_exists():
-                dialogo[0] = janela_senha(overlay.root, fechar)
+        if all(teclas) and (dialogo[0] is None or not dialogo[0].winfo_exists()):
+            dialogo[0] = janela_pausa(overlay.root, fechar)
         if dialogo[0] is not None and dialogo[0].winfo_exists():
-            dialogo[0].lift()  # senha sempre por cima do mosaico
+            dialogo[0].lift()  # sempre por cima do mosaico
         tick[0] += 1
-        if tick[0] % 30 == 0:  # ~2 s: o Painel mudou o config? reinicia
+        if tick[0] % 30 == 0:  # ~2 s: o Painel mudou o config?
             try:
                 m = os.path.getmtime(config.CAMINHO)
             except OSError:
                 m = mtime_cfg[0]
             if m != mtime_cfg[0]:
-                print("Config mudou; reiniciando.")
-                reiniciar[0] = True
-                estado.rodando = False
-                overlay.root.destroy()
-                return
+                mtime_cfg[0] = m
+                novo = config.carregar()
+                if any(novo[k] != cfg[k] for k in PRECISA_REINICIAR):
+                    print("Config mudou (modelos); reiniciando.")
+                    reiniciar[0] = True
+                    estado.rodando = False
+                    overlay.root.destroy()
+                    return
+                cfg.clear()
+                cfg.update(novo)  # as threads usam o mesmo dicionário
+                trabalhador.recarregar()
+                Saida.palavras = cfg["palavras_titulo"] + cfg["ocr"]["palavras"]
+                print("Config atualizado.")
         with estado.lock:
             patches = list(estado.patches)
             versao = estado.versao

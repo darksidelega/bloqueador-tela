@@ -1,11 +1,11 @@
-"""Autoproteção: senha para fechar/pausar, instância única, tarefa agendada.
+"""Autoproteção: modo restrito, pausa, instância única, início automático.
 
-A senha fica só como hash (PBKDF2) em senha.json. Fechar com a senha cria
-uma "pausa" assinada até um horário; enquanto ela vale, o guardião não
-reinicia o bloqueador.
+Modo restrito (como o "Strict mode" do AppBlock): até o horário escolhido
+não dá para pausar, desligar proteções nem desinstalar pelo painel; só dá
+para deixar mais rígido. Fica gravado em dados/restrito.json e no registro,
+assinado com uma chave local (editar à mão invalida).
 """
 import ctypes
-import hashlib
 import hmac
 import json
 import os
@@ -16,60 +16,99 @@ import time
 
 from . import config
 
-ARQ_SENHA = os.path.join(config.DADOS, "senha.json")
+ARQ_CHAVE = os.path.join(config.DADOS, "chave.bin")
 ARQ_PAUSA = os.path.join(config.DADOS, "pausa.json")
+ARQ_RESTRITO = os.path.join(config.DADOS, "restrito.json")
 NOME_TAREFA = "BloqueadorTela"
+CHAVE_APP = r"Software\BloqueadorTela"
 kernel32 = ctypes.windll.kernel32
 
 
-# ---------------- senha ----------------
-def _hash(senha, sal):
-    return hashlib.pbkdf2_hmac("sha256", senha.encode(), bytes.fromhex(sal), 200_000).hex()
+# ---------------- assinatura ----------------
+def _chave():
+    if not os.path.isfile(ARQ_CHAVE):
+        with open(ARQ_CHAVE, "wb") as f:
+            f.write(secrets.token_bytes(32))
+    with open(ARQ_CHAVE, "rb") as f:
+        return f.read()
 
 
-def tem_senha():
-    return os.path.isfile(ARQ_SENHA)
+def _assinatura(tipo, ate):
+    return hmac.new(_chave(), f"{tipo}:{ate}".encode(), "sha256").hexdigest()
 
 
-def definir_senha(senha):
-    sal = secrets.token_hex(16)
-    with open(ARQ_SENHA, "w", encoding="utf-8") as f:
-        json.dump({"sal": sal, "hash": _hash(senha, sal)}, f)
+def _gravar(arq, tipo, ate):
+    with open(arq, "w", encoding="utf-8") as f:
+        json.dump({"ate": ate, "assinatura": _assinatura(tipo, ate)}, f)
 
 
-def _dados_senha():
-    with open(ARQ_SENHA, encoding="utf-8") as f:
-        return json.load(f)
+def _ler(arq, tipo):
+    """Horário (epoch) gravado e válido, ou 0."""
+    try:
+        with open(arq, encoding="utf-8") as f:
+            d = json.load(f)
+        if hmac.compare_digest(d["assinatura"], _assinatura(tipo, d["ate"])):
+            return d["ate"]
+    except Exception:
+        pass
+    return 0
 
 
-def verificar_senha(senha):
-    if not tem_senha():
-        return True
-    d = _dados_senha()
-    time.sleep(0.5)  # atrasa tentativas em sequência
-    return hmac.compare_digest(_hash(senha, d["sal"]), d["hash"])
+# ---------------- modo restrito ----------------
+def _registro(valor=None):
+    import winreg
+    try:
+        if valor is None:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, CHAVE_APP) as k:
+                return json.loads(winreg.QueryValueEx(k, "Restrito")[0])
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, CHAVE_APP) as k:
+            winreg.SetValueEx(k, "Restrito", 0, winreg.REG_SZ, json.dumps(valor))
+    except OSError:
+        return None
+
+
+def restrito_ate():
+    """Até quando o modo restrito vale (epoch), ou 0 se desligado."""
+    ate = _ler(ARQ_RESTRITO, "restrito")
+    reg = _registro()
+    if reg:
+        try:
+            if hmac.compare_digest(reg["assinatura"], _assinatura("restrito", reg["ate"])):
+                ate = max(ate, reg["ate"])
+        except Exception:
+            pass
+    return ate if ate > time.time() else 0
+
+
+def restrito_ativo():
+    return restrito_ate() > 0
+
+
+def ativar_restrito(minutos):
+    """Liga (ou estende) o modo restrito. Nunca encurta."""
+    ate = int(max(restrito_ate(), time.time() + minutos * 60))
+    _gravar(ARQ_RESTRITO, "restrito", ate)
+    _registro({"ate": ate, "assinatura": _assinatura("restrito", ate)})
+    cancelar_pausa()
+    return ate
 
 
 # ---------------- pausa ----------------
-def _assinatura(ate):
-    chave = _dados_senha()["hash"] if tem_senha() else "sem-senha"
-    return hmac.new(chave.encode(), str(ate).encode(), "sha256").hexdigest()
-
-
 def pausar(minutos):
-    ate = int(time.time() + minutos * 60)
-    with open(ARQ_PAUSA, "w", encoding="utf-8") as f:
-        json.dump({"ate": ate, "assinatura": _assinatura(ate)}, f)
+    """Pausa o bloqueador (o guardião não o reabre). Bloqueado no modo restrito."""
+    if restrito_ativo():
+        return False
+    _gravar(ARQ_PAUSA, "pausa", int(time.time() + minutos * 60))
+    return True
+
+
+def pausa_ate():
+    ate = _ler(ARQ_PAUSA, "pausa")
+    return ate if ate > time.time() and not restrito_ativo() else 0
 
 
 def pausa_ativa():
-    try:
-        with open(ARQ_PAUSA, encoding="utf-8") as f:
-            d = json.load(f)
-        return (time.time() < d["ate"] and
-                hmac.compare_digest(d["assinatura"], _assinatura(d["ate"])))
-    except Exception:
-        return False
+    return pausa_ate() > 0
 
 
 def cancelar_pausa():
@@ -192,14 +231,6 @@ def rodar_admin(*args):
     r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                        capture_output=True, creationflags=SEM_JANELA)
     return r.returncode == 0
-
-
-def pausa_ate():
-    try:
-        with open(ARQ_PAUSA, encoding="utf-8") as f:
-            return json.load(f)["ate"] if pausa_ativa() else 0
-    except Exception:
-        return 0
 
 
 # ---------------- tarefa agendada (proteção forte, admin) ----------------

@@ -1,5 +1,5 @@
 """Ações que precisam de administrador. O Painel chama este script elevado
-(aparece o aviso do Windows) depois de conferir a senha.
+(aparece o aviso do Windows).
   admin.py hosts_aplicar | hosts_remover | tarefa_criar | tarefa_remover
 """
 import os
