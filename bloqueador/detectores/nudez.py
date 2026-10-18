@@ -83,29 +83,35 @@ class DetectorNudez(Detector):
 
     # ---------- etapa 2: regiões a pontuar ----------
     def _regioes(self, frame, imagens, dets):
+        """Lista de (região, soma_deteccoes). Região grande (vídeo em tela
+        cheia, grade que não separou) não soma detecções de pontos distantes:
+        cada detecção vira uma região local com seu contexto."""
         H, W = frame.shape[:2]
         pesos = self.cfg["pesos"]
-        regs = list(imagens)
+        limite = self.cfg["regiao_grande"] * W * H
+        pequenas = [r for r in imagens if rg.area(r) <= limite]
+        regs = [(r, True) for r in pequenas] +                [(r, False) for r in imagens if rg.area(r) > limite]
+        locais = []
         for c, s, x1, y1, x2, y2 in sorted(dets, key=lambda d: -d[1]):
             if pesos.get(c, 0) <= 0:
                 continue
             cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-            if any(rg.contem(r, cx, cy) for r in regs):
+            if any(rg.contem(r, cx, cy) for r in pequenas + locais):
                 continue
-            # sem imagem achada: usa a área em volta da detecção (contexto)
-            w, h = x2 - x1, y2 - y1
-            lado = max(w, h) * 1.5
-            regs.append((int(max(0, cx - lado)), int(max(0, cy - lado)),
-                         int(min(W, cx + lado)), int(min(H, cy + lado))))
+            # área em volta da detecção (pega rosto/corpo da mesma pessoa)
+            lado = max(x2 - x1, y2 - y1) * 2.0
+            locais.append((int(max(0, cx - lado)), int(max(0, cy - lado)),
+                           int(min(W, cx + lado)), int(min(H, cy + lado))))
+        regs += [(r, True) for r in locais]
         if not regs:
-            regs.append((0, 0, W, H))
+            regs.append(((0, 0, W, H), False))
         return regs
 
     # ---------- etapa 3: pontuação ----------
-    def _pontuar(self, frame, reg, dets, prioridade):
+    def _pontuar(self, frame, reg, dets, prioridade, somar=True):
         cfg, pesos = self.cfg, self.cfg["pesos"]
         melhor = {}
-        for c, s, x1, y1, x2, y2 in dets:
+        for c, s, x1, y1, x2, y2 in (dets if somar else []):
             if c in pesos and rg.contem(reg, (x1 + x2) / 2, (y1 + y2) / 2):
                 melhor[c] = max(melhor.get(c, 0), s)
 
@@ -174,12 +180,13 @@ class DetectorNudez(Detector):
 
         # classificador só nas regiões mais importantes (com sinais, depois maiores)
         def sinal(r):
+            reg, somar = r
             return max([s * pesos.get(c, 0) for c, s, a, b, cc, d in dets
-                        if rg.contem(r, (a + cc) / 2, (b + d) / 2)] + [0])
-        ordem = sorted(regs, key=lambda r: (-sinal(r), -rg.area(r)))
+                        if somar and rg.contem(reg, (a + cc) / 2, (b + d) / 2)] + [0])
+        ordem = sorted(regs, key=lambda r: (-sinal(r), -rg.area(r[0])))
         achados = []
-        for i, reg in enumerate(ordem):
-            pontos, detalhes = self._pontuar(frame, reg, dets, i < self.max_regioes)
+        for i, (reg, somar) in enumerate(ordem):
+            pontos, detalhes = self._pontuar(frame, reg, dets, i < self.max_regioes, somar)
             if not detalhes:
                 continue
             achados.append(Achado(reg, pontos, pontos >= self.cfg["limiar_bloqueio"],

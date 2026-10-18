@@ -89,8 +89,33 @@ def _para_overlay(img_bgr):
     return Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
 
 
-def mosaico(frame, x1, y1, x2, y2, bloco):
-    return _para_overlay(_pixelar(frame[y1:y2, x1:x2], bloco))
+def mosaico_tela(frame, cfg, rect_janela, monitor):
+    """Mosaico na tela toda, menos as abas/botões da janela ativa (para você
+    conseguir fechar) e a barra de tarefas."""
+    H, W = frame.shape[:2]
+    img = _pixelar(frame, cfg["bloco_tela"])
+    img[(img == 0).all(axis=2)] = 1
+    ox, oy = monitor["left"], monitor["top"]
+    # faixa de cima da janela ativa: abas, barra de título, minimizar/fechar
+    escala = 1.0
+    try:
+        escala = user32.GetDpiForWindow(user32.GetForegroundWindow()) / 96 or 1.0
+    except Exception:
+        pass
+    faixa = int(cfg["faixa_livre_px"] * escala)
+    l, t, r, _ = rect_janela
+    x1, x2 = max(0, l - ox), min(W, r - ox)
+    y1, y2 = max(0, t - oy), min(H, t - oy + faixa)
+    if faixa > 0 and x2 > x1 and y2 > y1:
+        img[y1:y2, x1:x2] = 0
+    # barra de tarefas = tudo fora da "área de trabalho"
+    area = ctypes.wintypes.RECT()
+    if cfg["liberar_barra_tarefas"] and user32.SystemParametersInfoW(0x30, 0, ctypes.byref(area), 0):
+        img[:max(0, area.top - oy)] = 0
+        img[max(0, area.bottom - oy):] = 0
+        img[:, :max(0, area.left - ox)] = 0
+        img[:, max(0, area.right - ox):] = 0
+    return Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
 
 def mosaico_suave(frame, x1, y1, x2, y2, bloco, suave):
@@ -217,6 +242,7 @@ class Estado:
         self.lock = threading.Lock()
         self.rodando = True
         self.ocr_ate = 0.0      # cobre a tela até este horário (OCR achou palavra)
+        self.ocr_titulo = ""    # ...mas só enquanto a página for a mesma
 
 
 class Medidor:
@@ -284,10 +310,11 @@ class Trabalhador:
         H, W = frame.shape[:2]
         t1 = time.perf_counter()
 
-        titulo, processo, _ = janela_ativa()
+        titulo, processo, rect_janela = janela_ativa()
         vale = eh_navegador(processo, cfg) and not any(j in titulo for j in self.ignorar)
         titulo_ruim = vale and (any(p in titulo for p in self.palavras)
-                                or time.time() < estado.ocr_ate)
+                                or (time.time() < estado.ocr_ate
+                                    and titulo == estado.ocr_titulo))
         if not mudou and titulo_ruim == self.ultimo_titulo_ruim:
             # tela parada: mantém o que está e não gasta CPU/GPU
             self.parados += 1
@@ -325,7 +352,7 @@ class Trabalhador:
                 novos.append(mosaico_suave(frame, x1, y1, x2, y2, cfg["bloco"],
                                            cfg["suavizar_px"]))
         if titulo_ruim or (novos and cfg["modo"] == "tela"):
-            novos = [(0, 0, mosaico(frame, 0, 0, W, H, cfg["bloco_tela"]))]
+            novos = [(0, 0, mosaico_tela(frame, cfg, rect_janela, self.monitor))]
 
         agora = time.time()
         with estado.lock:
@@ -400,6 +427,7 @@ def vigiar_ocr(monitor, estado, cfg):
                     print(f"[ocr] {achadas} ({(time.perf_counter() - t0) * 1000:.0f}ms)")
                 if achadas:
                     estado.ocr_ate = time.time() + oc["persistencia"]
+                    estado.ocr_titulo = titulo
             except Exception as e:
                 print("Erro no OCR:", e)
 

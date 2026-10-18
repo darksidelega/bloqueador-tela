@@ -21,6 +21,10 @@ PADRAO = {
     "suavizar_px": 48,           # borda suave em volta do mosaico (feather)
     "bloco": 14,
     "bloco_tela": 45,
+    # No blur de tela inteira, deixa livres a faixa de cima da janela ativa
+    # (abas + botões de fechar, em px a 100% de escala) e a barra de tarefas.
+    "faixa_livre_px": 90,
+    "liberar_barra_tarefas": True,
     "dispositivo": "auto",       # "auto" (GPU se houver) | "gpu" | "cpu"
     "detectores": ["nudez"],     # futuramente: ["nudez", "gore"]
 
@@ -74,6 +78,9 @@ PADRAO = {
     "teto_classificador_sozinho": 0.6,
     # Score a partir do qual genitália/ânus visível ignora o contexto masculino.
     "score_forte": 0.4,
+    # Região maior que essa fração da tela não soma detecções de pontos
+    # diferentes (evita juntar várias miniaturas e borrar tudo).
+    "regiao_grande": 0.3,
     "fator_veto": 0.6,
 
     "palavras_titulo": [
