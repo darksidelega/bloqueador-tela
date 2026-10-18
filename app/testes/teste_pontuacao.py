@@ -44,6 +44,14 @@ CASOS = [  # (descrição, deve bloquear, nsfw, classes)
     ("pênis com rosto masculino", True, 0.9, dict(FACE_MALE=0.6, MALE_GENITALIA_EXPOSED=0.6)),
     ("genitália feminina, classificador incerto", True, 0.5,
      dict(FEMALE_GENITALIA_EXPOSED=0.3)),
+    ("nua tapando os seios com a mão, sem rosto", True, 1.0, dict(BELLY_EXPOSED=0.77)),
+    # lutador sem camisa que o modelo erra: rosto/peito/genitália "femininos" fracos
+    ("lutador: rosto e peito masculinos dominam, erros femininos", False, 1.0,
+     dict(FACE_MALE=0.85, MALE_BREAST_EXPOSED=0.74, BELLY_EXPOSED=0.70, FACE_FEMALE=0.47,
+          FEMALE_BREAST_EXPOSED=0.46, FEMALE_GENITALIA_EXPOSED=0.41, FEMALE_GENITALIA_COVERED=0.44)),
+    ("lutador: genitália feminina falsa em 0.41", False, 1.0,
+     dict(FACE_MALE=0.75, MALE_BREAST_EXPOSED=0.47, BELLY_EXPOSED=0.63,
+          FEMALE_GENITALIA_EXPOSED=0.41, FEMALE_GENITALIA_COVERED=0.45)),
 ]
 
 erros = 0

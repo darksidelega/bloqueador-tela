@@ -42,13 +42,26 @@ PADRAO = {
         "ativo": True,
         "modelo_gpu": "modelos/nsfw_vit.onnx",
         "modelo_cpu": "modelos/nsfw_vit_int8.onnx",
-        "max_regioes": 10,
+        "max_regioes": 30,       # o Google Imagens tem ~30 miniaturas na tela
         "max_regioes_cpu": 2
     },
 
     # Pontuação: cada região soma score*peso (maior score de cada classe)
     # e o score do classificador * peso_classificador. Bloqueia se >= limiar.
     "limiar_bloqueio": 1.0,
+    # Palavra proibida (título da aba ou texto da página) não cobre nada
+    # sozinha: só baixa o limiar das imagens daquela janela para este valor.
+    "limiar_com_palavra": 0.4,
+    # Página com palavra proibida e pelo menos isso de fotos sensíveis na tela
+    # fica coberta inteira ("conteúdo sensível") até você sair dela.
+    "travar_pagina_fotos": 8,
+    # Prévia das janelas na barra de tarefas e Alt+Tab com miniaturas: o
+    # Windows desenha acima de qualquer programa (o mosaico não cobre), então
+    # o jeito é desligar as miniaturas no Windows (reinicia a barra).
+    "esconder_previas": False,
+    # Esconde vídeos curtos (Shorts/Reels/feed do TikTok) pela extensão de
+    # navegador. Não cobre: remove da página. Precisa instalar a extensão.
+    "bloquear_shorts": False,
     "peso_classificador": 1.15,
     "pesos": {
         "FEMALE_GENITALIA_EXPOSED": 4.0,
@@ -75,17 +88,25 @@ PADRAO = {
     # genitália) só conta até isso -> sozinho não bloqueia (telas de UFC).
     "teto_classificador_sozinho": 0.6,
     # Score a partir do qual genitália/ânus visível ignora o contexto masculino.
-    "score_forte": 0.4,
+    "score_forte": 0.5,
     # Região maior que essa fração da tela não soma detecções de pontos
     # diferentes (evita juntar várias miniaturas e borrar tudo).
     "regiao_grande": 0.3,
-    "fator_veto": 0.6,
+    "fator_veto": 0.35,
 
     "titulo_ativo": True,        # bloqueia pela palavra no título da aba
     "palavras_titulo": [
         "porn", "pornô", "porno", "xxx", "xvideos", "xnxx", "xhamster",
         "redtube", "youporn", "hentai", "nsfw", "onlyfans", "putaria",
-        "brazzers", "chaturbate", "nudes", "sexo explícito", "rule34"
+        "brazzers", "chaturbate", "nudes", "sexo explícito", "rule34", "pornhub",
+        "naked", "sextape", "sex tape", "pelada", "peladas", "leaked nudes",
+        # gírias: como a palavra sozinha não cobre nada (só deixa a IA mais
+        # exigente com as imagens), dá para ser generoso aqui
+        "punheta", "buceta", "boceta", "xoxota", "boquete", "gozada", "gozando",
+        "safada", "safadas", "putinha", "novinha nua", "nua", "nuas", "sexo",
+        "transando", "nude", "pussy", "boobs", "tits", "blowjob", "cumshot",
+        "cum", "fuck", "fucking", "sexy", "erotic", "erótico", "lingerie",
+        "leaked", "onlyfans leak", "fansly"
     ],
     "ocr": {
         "ativo": True,           # lê o texto da tela (OCR do Windows, local)
@@ -94,7 +115,8 @@ PADRAO = {
         "palavras": [
             "porn", "pornô", "porno", "pornhub", "xvideos", "xnxx", "xhamster",
             "redtube", "youporn", "hentai", "brazzers", "onlyfans", "chaturbate",
-            "spankbang", "rule34", "nhentai"
+            "spankbang", "rule34", "nhentai", "nudes", "sextape", "punheta",
+            "buceta", "boquete", "pussy", "blowjob", "cumshot", "fansly"
         ]
     },
     # Título e OCR só valem quando a janela ativa é um navegador
@@ -114,8 +136,23 @@ PADRAO = {
     ],
     "sites_bloqueados": "dados/sites_bloqueados.txt",
     "bloquear_sites": True,      # aplica a lista no arquivo hosts (precisa admin)
-    "forcar_safesearch": True    # Google/Bing/DuckDuckGo sempre com SafeSearch
+    "forcar_safesearch": True,   # Google/Bing/DuckDuckGo sempre com SafeSearch
+
+    # Bloqueio rápido (botão no Painel ou Ctrl + Alt + Shift + B): liga o modo
+    # restrito por este tempo, sem perguntar nada.
+    "bloqueio_rapido_min": 30,
+    # Com conteúdo sensível na tela, PrtSc e Win+Shift+S são ignorados e
+    # estes apps de print são fechados se abrirem.
+    "apps_de_print": ["screenclippinghost.exe", "snippingtool.exe", "lightshot.exe",
+                      "sharex.exe", "greenshot.exe", "screensketch.exe"],
+    # Avisa para dar uma pausa depois de X minutos seguidos usando o PC.
+    # Ficar `pausa_conta_min` minutos sem mexer no PC conta como pausa.
+    "lembrete_pausa": {"ativo": False, "minutos": 25, "pausa_conta_min": 5}
 }
+
+# Listas que sempre têm as palavras padrão (palavras novas de uma versão nova
+# chegam mesmo para quem já tem config.json); o que você adicionou fica.
+LISTAS = (("palavras_titulo",), ("ocr", "palavras"))
 
 
 def _mesclar(base, novo):
@@ -136,18 +173,34 @@ def _migrar():
             os.replace(velho, novo)
 
 
+def completar(salvo):
+    """Padrão + o que está em `salvo` (chaves novas de versões novas entram;
+    as listas de palavras sempre têm as padrão)."""
+    cfg = _mesclar(copy.deepcopy(PADRAO), salvo)
+    if cfg["sites_bloqueados"] == "sites_bloqueados.txt":
+        cfg["sites_bloqueados"] = PADRAO["sites_bloqueados"]
+    for chaves in LISTAS:
+        pai, padrao = cfg, PADRAO
+        for k in chaves[:-1]:
+            pai, padrao = pai[k], padrao[k]
+        k = chaves[-1]
+        pai[k] = padrao[k] + [p for p in pai[k] if p not in padrao[k]]
+    return cfg
+
+
 def carregar():
     _migrar()
-    cfg = copy.deepcopy(PADRAO)
-    if os.path.isfile(CAMINHO):
-        with open(CAMINHO, encoding="utf-8") as f:
-            _mesclar(cfg, json.load(f))
-        if cfg["sites_bloqueados"] == "sites_bloqueados.txt":
-            cfg["sites_bloqueados"] = PADRAO["sites_bloqueados"]
-    else:
+    if not os.path.isfile(CAMINHO):
         with open(CAMINHO, "w", encoding="utf-8") as f:
             json.dump(PADRAO, f, ensure_ascii=False, indent=2)
-    return cfg
+        return copy.deepcopy(PADRAO)
+    try:
+        with open(CAMINHO, encoding="utf-8") as f:
+            return completar(json.load(f))
+    except (ValueError, TypeError, AttributeError, KeyError) as e:
+        # arquivo estragado (à mão ou não) não pode derrubar o app: vale o padrão
+        print("config.json inválido, usando o padrão:", repr(e))
+        return copy.deepcopy(PADRAO)
 
 
 def salvar(cfg):

@@ -44,6 +44,20 @@ class Cache:
         return v
 
 
+# classes em que uma detecção fraca (pouca confiança) deve pesar pouco:
+# abaixo de 0.5 a contribuição cai por uma curva quadrática (0.3 vira ~0.18,
+# 0.2 vira ~0.08). Acima de 0.5 conta normal. Rosto e barriga ficam de fora.
+_CLASSES_RAMPA = {"FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "ANUS_EXPOSED",
+                  "FEMALE_GENITALIA_COVERED", "ANUS_COVERED", "BUTTOCKS_EXPOSED",
+                  "FEMALE_BREAST_EXPOSED"}
+
+
+def _efetivo(classe, score):
+    if classe in _CLASSES_RAMPA and score < 0.5:
+        return score * score / 0.5
+    return score
+
+
 class DetectorNudez(Detector):
     nome = "nudez"
 
@@ -98,14 +112,41 @@ class DetectorNudez(Detector):
             cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
             if any(rg.contem(r, cx, cy) for r in pequenas + locais):
                 continue
-            # área em volta da detecção (pega rosto/corpo da mesma pessoa)
+            # área em volta da detecção + o corpo da mesma pessoa (cobre a
+            # pessoa toda, não só o seio)
             lado = max(x2 - x1, y2 - y1) * 2.0
-            locais.append((int(max(0, cx - lado)), int(max(0, cy - lado)),
-                           int(min(W, cx + lado)), int(min(H, cy + lado))))
+            bx1, by1, bx2, by2 = self._corpo(dets, (x1, y1, x2, y2), pequenas, limite)
+            locais.append((int(max(0, min(cx - lado, bx1))), int(max(0, min(cy - lado, by1))),
+                           int(min(W, max(cx + lado, bx2))), int(min(H, max(cy + lado, by2)))))
         regs += [(r, True) for r in locais]
         if not regs:
             regs.append(((0, 0, W, H), False))
         return regs
+
+    @staticmethod
+    def _corpo(dets, caixa, pequenas, limite):
+        """Junta à `caixa` as partes do corpo vizinhas (rosto, barriga,
+        pernas...) que não estão em outra imagem, até `limite` de área.
+        Retorna a caixa da pessoa com uma folga."""
+        x1, y1, x2, y2 = caixa
+        juntou = True
+        while juntou:
+            juntou = False
+            alc = max(x2 - x1, y2 - y1) * 0.8
+            for _, _, a, b, c, d in dets:
+                mx, my = (a + c) / 2, (b + d) / 2
+                if a >= x1 and b >= y1 and c <= x2 and d <= y2:
+                    continue  # já está dentro
+                if not (x1 - alc <= mx <= x2 + alc and y1 - alc <= my <= y2 + alc):
+                    continue
+                if any(rg.contem(r, mx, my) for r in pequenas):
+                    continue  # é de outra imagem (miniatura vizinha)
+                n = (min(x1, a), min(y1, b), max(x2, c), max(y2, d))
+                if rg.area(n) > limite:
+                    continue
+                (x1, y1, x2, y2), juntou = n, True
+        folga = max(x2 - x1, y2 - y1) * 0.15
+        return x1 - folga, y1 - folga, x2 + folga, y2 + folga
 
     # ---------- etapa 3: pontuação ----------
     def _pontuar(self, frame, reg, dets, prioridade, somar=True):
@@ -115,7 +156,10 @@ class DetectorNudez(Detector):
             if c in pesos and rg.contem(reg, (x1 + x2) / 2, (y1 + y2) / 2):
                 melhor[c] = max(melhor.get(c, 0), s)
 
-        termos = {c: s * pesos[c] for c, s in melhor.items() if pesos[c]}
+        # detecção fraca (abaixo de 0.5) nas classes de peso alto conta bem menos:
+        # o NudeNet marca "genitália/peito" em 0.2-0.4 em roupa, manequim, etc.,
+        # e com peso cheio isso sozinho já bloqueava (falso positivo).
+        termos = {c: _efetivo(c, s) * pesos[c] for c, s in melhor.items() if pesos[c]}
         detalhes = [f"{c} {s:.2f}" for c, s in sorted(melhor.items(), key=lambda t: -t[1])
                     if pesos[c] or c.startswith("FACE")]
         prob = 0.0
@@ -136,15 +180,28 @@ class DetectorNudez(Detector):
         def s(c):
             return melhor.get(c, 0)
 
-        # genitália/ânus visível = sinal forte, sempre conta
-        forte = max(s("FEMALE_GENITALIA_EXPOSED"), s("MALE_GENITALIA_EXPOSED"),
-                    s("ANUS_EXPOSED")) >= cfg["score_forte"]
-        # contexto masculino (lutador): peito/rosto de homem e nenhum rosto de mulher
-        masculino = (max(s("MALE_BREAST_EXPOSED"), s("FACE_MALE")) >= 0.3
-                     and s("FACE_FEMALE") < 0.3)
-        if masculino and not forte:
-            # peitoral grande vira "FEMALE_BREAST" no NudeNet: não conta
-            termos.pop("FEMALE_BREAST_EXPOSED", None)
+        # imagem claramente masculina (lutador sem camisa): o rosto masculino
+        # domina o feminino E o peito lido como masculino domina o "feminino"
+        # (o peitoral vira FEMALE_BREAST no NudeNet). Vale mesmo com um rosto
+        # feminino fraco junto, que o modelo erra nesses casos.
+        male_face, fem_face = s("FACE_MALE"), s("FACE_FEMALE")
+        male_peito, fem_peito = s("MALE_BREAST_EXPOSED"), s("FEMALE_BREAST_EXPOSED")
+        # sinais de homem sem camisa: peito masculino exposto (o peitoral às
+        # vezes é lido como feminino, por isso basta ele existir), ou rosto
+        # masculino sem rosto/peito feminino competindo (lutador de shorts).
+        masc_sinais = (male_peito >= 0.4
+                       or (male_face >= 0.4 and fem_face < 0.4 and fem_peito < 0.5))
+        # genitália/ânus visível = sinal forte, atropela o contexto masculino.
+        # Numa imagem masculina a "genitália feminina" quase sempre é erro, então
+        # ela precisa de confiança bem maior para contar.
+        forte = (max(s("MALE_GENITALIA_EXPOSED"), s("ANUS_EXPOSED")) >= cfg["score_forte"]
+                 or s("FEMALE_GENITALIA_EXPOSED") >= (0.6 if masc_sinais else cfg["score_forte"]))
+        masculino = masc_sinais and not forte
+        if masculino:
+            # peitoral e "genitália/peito feminino" são erros sobre o corpo do homem
+            for c in ("FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED",
+                      "FEMALE_GENITALIA_COVERED"):
+                termos.pop(c, None)
             detalhes.append("(contexto masculino)")
 
         # classificador sozinho não basta: precisa de algum sinal de corpo feminino
@@ -152,7 +209,8 @@ class DetectorNudez(Detector):
         sinais = ["FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "ANUS_EXPOSED",
                   "BUTTOCKS_EXPOSED", "FACE_FEMALE"]
         if not masculino:
-            sinais.append("FEMALE_BREAST_EXPOSED")
+            # barriga de fora + classificador certo = nua tapando o peito com a mão
+            sinais += ["FEMALE_BREAST_EXPOSED", "BELLY_EXPOSED"]
         tem_sinal = any(s(c) >= 0.25 for c in sinais)
         if "classificador" in termos and not tem_sinal:
             if termos["classificador"] > cfg["teto_classificador_sozinho"]:
@@ -171,6 +229,14 @@ class DetectorNudez(Detector):
         if masculino and not forte and pontos >= cfg["limiar_bloqueio"]:
             pontos = cfg["limiar_bloqueio"] * 0.9
             detalhes.append("(contexto masculino: teto)")
+        # classificador com certeza que é limpo (prob ~0): só genitália/ânus
+        # MUITO confiante (>= 0.8) mantém o bloqueio. Produto, manequim e roupa
+        # dão "genitália" fraca que, sem o classificador, virava falso positivo.
+        if (self.clf and prioridade and prob < cfg["veto_classificador"]
+                and max(s("FEMALE_GENITALIA_EXPOSED"), s("MALE_GENITALIA_EXPOSED"),
+                        s("ANUS_EXPOSED")) < 0.8 and pontos >= cfg["limiar_bloqueio"]):
+            pontos = cfg["limiar_bloqueio"] * 0.9
+            detalhes.append("(classificador certo que é normal)")
         return pontos, detalhes
 
     def analisar(self, frame, imagens):

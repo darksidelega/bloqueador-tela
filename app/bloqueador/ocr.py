@@ -43,9 +43,10 @@ class LeitorTela:
 
 
 def achar_palavras(texto, palavras):
-    """Palavras inteiras (evita 'sexta' casar com 'sex')."""
+    """Palavras inteiras, aceitando plural (evita 'sexta' casar com 'sex' e
+    'pornomes' com 'porno')."""
     achadas = []
     for p in palavras:
-        if re.search(r"(?<![a-z0-9])" + re.escape(p.lower()) + r"(?![a-z0-9])", texto):
+        if re.search(r"(?<![^\W_])" + re.escape(p.lower()) + r"s?(?![^\W_])", texto):
             achadas.append(p)
     return achadas
