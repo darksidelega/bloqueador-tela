@@ -11,6 +11,9 @@ CAMINHO = os.path.join(DADOS, "config.json")
 
 PADRAO = {
     "debug": True,
+    # Apaga os logs arquivados com mais de tantos dias (o log ativo é
+    # rotacionado por tamanho). 0 = nunca apagar por tempo.
+    "dias_log": 7,
     "modo": "parte",             # "parte" = só a área | "tela" = cobre tudo
     "intervalo": 0.25,           # segundos entre análises (normal)
     "intervalo_rapido": 0.10,    # quando algo suspeito aparece

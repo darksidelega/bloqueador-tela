@@ -379,15 +379,42 @@ def titulo_janela(hwnd=None):
         return ""
 
 
+MAX_LOG = 3_000_000  # tamanho do log ativo antes de arquivar
+
+
+def limpar_logs(pasta, dias):
+    """Apaga os logs arquivados com mais de `dias` dias (0 = nunca), para a
+    pasta não crescer sem parar. Não mexe no log ativo (bloqueador.log)."""
+    if dias <= 0:
+        return
+    corte = time.time() - dias * 86400
+    try:
+        for nome in os.listdir(pasta):
+            caminho = os.path.join(pasta, nome)
+            if nome == "bloqueador.log" or not nome.startswith("bloqueador.log"):
+                continue
+            try:
+                if os.path.getmtime(caminho) < corte:
+                    os.remove(caminho)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 class Saida:
-    """Escreve no console (se houver) e em logs/bloqueador.log."""
+    """Escreve no console (se houver) e em logs/bloqueador.log, arquivando o
+    log quando passa de MAX_LOG e apagando arquivos antigos (não fica pesado)."""
 
     lock = threading.Lock()
     local = threading.local()
     palavras = []
 
-    def __init__(self, console, caminho):
+    def __init__(self, console, caminho, dias):
         self.console = console
+        self.caminho = caminho
+        self.dias = dias
+        self.desde_conferiu = 0
         self.arq = open(caminho, "a", encoding="utf-8", buffering=1)
 
     def write(self, txt):
@@ -401,6 +428,10 @@ class Saida:
         txt = mascarar(txt, Saida.palavras)
         with self.lock:
             self.arq.write(txt)
+            self.desde_conferiu += len(txt)
+            if self.desde_conferiu > 200_000:  # confere o tamanho de vez em quando
+                self.desde_conferiu = 0
+                self._talvez_arquivar()
             if self.console:
                 try:
                     self.console.write(txt)
@@ -408,20 +439,39 @@ class Saida:
                     self.console.write(txt.encode("ascii", "replace").decode())
                 self.console.flush()
 
+    def _talvez_arquivar(self):
+        try:
+            if self.arq.tell() < MAX_LOG:
+                return
+        except (OSError, ValueError):
+            return
+        self.arq.close()
+        try:  # bloqueador.log -> bloqueador.log.AAAAMMDD-HHMMSS
+            os.replace(self.caminho, self.caminho + time.strftime(".%Y%m%d-%H%M%S"))
+        except OSError:
+            pass
+        self.arq = open(self.caminho, "a", encoding="utf-8", buffering=1)
+        limpar_logs(os.path.dirname(self.caminho), self.dias)
+
     def flush(self):
         self.arq.flush()
         if self.console:
             self.console.flush()
 
 
-def configurar_log():
+def configurar_log(dias=7):
     pasta = config.caminho("logs")
     os.makedirs(pasta, exist_ok=True)
     arq = os.path.join(pasta, "bloqueador.log")
-    if os.path.isfile(arq) and os.path.getsize(arq) > 5_000_000:
-        os.replace(arq, arq + ".old")
-    sys.stdout = Saida(sys.stdout, arq)
-    sys.stderr = Saida(sys.stderr, arq)
+    if os.path.isfile(arq) and os.path.getsize(arq) > MAX_LOG:
+        try:
+            os.replace(arq, arq + time.strftime(".%Y%m%d-%H%M%S"))
+        except OSError:
+            pass
+    limpar_logs(pasta, dias)
+    # um só objeto para stdout e stderr: um dono do arquivo, um lock, um arquivamento
+    saida = Saida(sys.stdout, arq, dias)
+    sys.stdout = sys.stderr = saida
 
 
 class Estado:
@@ -967,7 +1017,7 @@ def main():
     if not protecao.instancia_unica("app"):
         return  # já tem um bloqueador rodando
     os.chdir(config.PASTA)
-    configurar_log()
+    configurar_log(config.carregar().get("dias_log", 7))
     protecao.cancelar_pausa()  # abriu o app = quer proteção agora
     try:  # ícone próprio na barra de tarefas (em vez do Python)
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BloqueadorTela.Motor")
