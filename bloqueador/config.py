@@ -13,11 +13,12 @@ CAMINHO = os.path.join(PASTA, "config.json")
 
 PADRAO = {
     "debug": True,
-    "modo": "tela",              # "tela" = cobre tudo | "parte" = só a área
+    "modo": "parte",             # "parte" = só a área | "tela" = cobre tudo
     "intervalo": 0.25,           # segundos entre análises (normal)
     "intervalo_rapido": 0.10,    # quando algo suspeito aparece
     "persistencia": 1.0,         # segundos mantendo o mosaico após sumir
-    "margem": 0.30,
+    "margem": 0.50,              # aumenta a área coberta (0.5 = +25% de cada lado)
+    "suavizar_px": 48,           # borda suave em volta do mosaico (feather)
     "bloco": 14,
     "bloco_tela": 45,
     "dispositivo": "auto",       # "auto" (GPU se houver) | "gpu" | "cpu"
@@ -68,6 +69,11 @@ PADRAO = {
     # Se o classificador tiver certeza que é imagem normal (prob < veto),
     # os pontos do NudeNet são multiplicados por fator_veto (menos falso positivo).
     "veto_classificador": 0.02,
+    # Classificador sem nenhum sinal de corpo (rosto feminino, peito, nádega,
+    # genitália) só conta até isso -> sozinho não bloqueia (telas de UFC).
+    "teto_classificador_sozinho": 0.6,
+    # Score a partir do qual genitália/ânus visível ignora o contexto masculino.
+    "score_forte": 0.4,
     "fator_veto": 0.6,
 
     "palavras_titulo": [
@@ -85,6 +91,14 @@ PADRAO = {
             "spankbang", "rule34", "nhentai"
         ]
     },
+    # Título e OCR só valem quando a janela ativa é um navegador
+    # (mensagem com a palavra no WhatsApp/Discord app não bloqueia).
+    "so_navegador": True,
+    "navegadores": [
+        "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
+        "opera_gx.exe", "vivaldi.exe", "arc.exe", "zen.exe", "librewolf.exe",
+        "waterfox.exe", "iexplore.exe", "browser.exe", "chromium.exe", "thorium.exe"
+    ],
     # Janelas onde título e OCR não bloqueiam (você editando listas/logs,
     # terminal, Claude). A detecção de imagens continua valendo nelas.
     "ignorar_janelas": [

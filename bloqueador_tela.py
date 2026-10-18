@@ -8,6 +8,7 @@ Ajustes: config.json (criado na primeira execução).
 Fechar/pausar: Ctrl + Alt + Shift + Q (pede a senha, se houver)
 """
 import ctypes
+import ctypes.wintypes
 import os
 import re
 import sys
@@ -18,6 +19,7 @@ import tkinter as tk
 import cv2
 import mss
 import numpy as np
+import psutil
 from PIL import Image, ImageTk
 
 from bloqueador import config, ocr, protecao, regioes, sites
@@ -74,13 +76,42 @@ class Overlay:
             self.canvas.create_image(x, y, image=foto, anchor="nw")
 
 
-def mosaico(frame, x1, y1, x2, y2, bloco):
-    recorte = frame[y1:y2, x1:x2]
+def _pixelar(recorte, bloco):
     h, w = recorte.shape[:2]
     pequeno = cv2.resize(recorte, (max(1, w // bloco), max(1, h // bloco)),
                          interpolation=cv2.INTER_LINEAR)
-    grande = cv2.resize(pequeno, (w, h), interpolation=cv2.INTER_NEAREST)
-    return Image.fromarray(cv2.cvtColor(grande, cv2.COLOR_BGR2RGB))
+    return cv2.resize(pequeno, (w, h), interpolation=cv2.INTER_NEAREST)
+
+
+def _para_overlay(img_bgr):
+    # preto puro é a cor transparente do overlay: evita "furos" no mosaico
+    img_bgr[(img_bgr == 0).all(axis=2)] = 1
+    return Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+
+
+def mosaico(frame, x1, y1, x2, y2, bloco):
+    return _para_overlay(_pixelar(frame[y1:y2, x1:x2], bloco))
+
+
+def mosaico_suave(frame, x1, y1, x2, y2, bloco, suave):
+    """Mosaico na caixa + borda de `suave` px que vai sumindo (tipo feather
+    do After Effects). Retorna (x, y, imagem)."""
+    H, W = frame.shape[:2]
+    X1, Y1 = max(0, x1 - suave), max(0, y1 - suave)
+    X2, Y2 = min(W, x2 + suave), min(H, y2 + suave)
+    recorte = frame[Y1:Y2, X1:X2]
+    mos = _pixelar(recorte, bloco)
+    if suave <= 0:
+        return X1, Y1, _para_overlay(mos)
+    fora = np.ones(recorte.shape[:2], np.uint8)
+    fora[y1 - Y1:y2 - Y1, x1 - X1:x2 - X1] = 0
+    dist = cv2.distanceTransform(fora, cv2.DIST_L2, 3)
+    a = np.clip(1 - dist / suave, 0, 1)
+    a = (a * a * (3 - 2 * a))[:, :, None]          # curva suave (smoothstep)
+    out = (mos * a + recorte * (1 - a)).astype(np.uint8)
+    out[(out == 0).all(axis=2)] = 1
+    out[a[:, :, 0] < 0.03] = 0                     # bem longe: transparente
+    return X1, Y1, Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB))
 
 
 def janelas_ignoradas(cfg):
@@ -98,9 +129,34 @@ def mascarar(texto, palavras):
     return texto
 
 
-def titulo_janela():
+_processos = {}
+
+
+def janela_ativa():
+    """(título em minúsculas, nome do processo, retângulo) da janela ativa."""
+    hwnd = user32.GetForegroundWindow()
+    titulo = titulo_janela(hwnd)
+    pid = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if pid.value not in _processos:
+        try:
+            _processos[pid.value] = psutil.Process(pid.value).name().lower()
+        except Exception:
+            _processos[pid.value] = ""
+    r = ctypes.wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    return titulo, _processos[pid.value], (r.left, r.top, r.right, r.bottom)
+
+
+def eh_navegador(processo, cfg):
+    if not cfg["so_navegador"]:
+        return True
+    return processo in [n.lower() for n in cfg["navegadores"]]
+
+
+def titulo_janela(hwnd=None):
     try:
-        hwnd = user32.GetForegroundWindow()
+        hwnd = hwnd or user32.GetForegroundWindow()
         n = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(n + 1)
         user32.GetWindowTextW(hwnd, buf, n + 1)
@@ -228,10 +284,10 @@ class Trabalhador:
         H, W = frame.shape[:2]
         t1 = time.perf_counter()
 
-        titulo = titulo_janela()
-        ignorada = any(j in titulo for j in self.ignorar)
-        titulo_ruim = not ignorada and (any(p in titulo for p in self.palavras)
-                                        or time.time() < estado.ocr_ate)
+        titulo, processo, _ = janela_ativa()
+        vale = eh_navegador(processo, cfg) and not any(j in titulo for j in self.ignorar)
+        titulo_ruim = vale and (any(p in titulo for p in self.palavras)
+                                or time.time() < estado.ocr_ate)
         if not mudou and titulo_ruim == self.ultimo_titulo_ruim:
             # tela parada: mantém o que está e não gasta CPU/GPU
             self.parados += 1
@@ -266,7 +322,8 @@ class Trabalhador:
             x1, y1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
             x2, y2 = int(min(W, x2 + mx)), int(min(H, y2 + my))
             if x2 - x1 >= 4 and y2 - y1 >= 4:
-                novos.append((x1, y1, mosaico(frame, x1, y1, x2, y2, cfg["bloco"])))
+                novos.append(mosaico_suave(frame, x1, y1, x2, y2, cfg["bloco"],
+                                           cfg["suavizar_px"]))
         if titulo_ruim or (novos and cfg["modo"] == "tela"):
             novos = [(0, 0, mosaico(frame, 0, 0, W, H, cfg["bloco_tela"]))]
 
@@ -326,12 +383,18 @@ def vigiar_ocr(monitor, estado, cfg):
     with mss.MSS() as sct:
         while estado.rodando:
             time.sleep(oc["intervalo"])
-            titulo = titulo_janela()
-            if any(j in titulo for j in ignorar):
+            titulo, processo, (l, t, r, b) = janela_ativa()
+            if not eh_navegador(processo, cfg) or any(j in titulo for j in ignorar):
                 continue
             try:
                 t0 = time.perf_counter()
-                frame = np.array(sct.grab(monitor))[:, :, :3]
+                # só a janela do navegador (mensagem no WhatsApp ao lado não conta)
+                area = {"left": max(l, monitor["left"]), "top": max(t, monitor["top"])}
+                area["width"] = min(r, monitor["left"] + monitor["width"]) - area["left"]
+                area["height"] = min(b, monitor["top"] + monitor["height"]) - area["top"]
+                if area["width"] < 50 or area["height"] < 50:
+                    continue
+                frame = np.array(sct.grab(area))[:, :, :3]
                 achadas = ocr.achar_palavras(leitor.ler(frame), oc["palavras"])
                 if cfg["debug"] and achadas:
                     print(f"[ocr] {achadas} ({(time.perf_counter() - t0) * 1000:.0f}ms)")

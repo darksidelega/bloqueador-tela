@@ -22,6 +22,10 @@ Bloqueia se `pontos >= limiar_bloqueio` (1.0).
 - `NSFW` = classificador da imagem inteira (pega mão cobrindo, sem rosto).
 - Classes = NudeNet 640m (partes do corpo), rodando em fatias para achar miniaturas.
 - `MALE_BREAST_EXPOSED` tem peso negativo (lutador sem camisa).
+- Contexto masculino (peito/rosto de homem e nenhum rosto feminino): peitoral não
+  conta como peito feminino e não bloqueia, a não ser com genitália visível.
+- Classificador sozinho (sem rosto feminino/peito/nádega/genitália) fica limitado a
+  `teto_classificador_sozinho` (não bloqueia sozinho).
 - Peito feminino sozinho fica limitado a `teto_peito_sozinho` (< 1, então não bloqueia sozinho).
 - Se o classificador tem certeza que é normal (`< veto_classificador`), o NudeNet vale `fator_veto`.
 
@@ -31,7 +35,12 @@ Falso positivo: faça o contrário com a classe que aparece no log.
 ## Outras camadas
 - `sites_bloqueados.txt`: domínios bloqueados pelo arquivo hosts (`3_bloquear_sites.bat`).
 - `forcar_safesearch`: Google/Bing/DuckDuckGo sempre com SafeSearch.
-- `palavras_titulo` e `ocr.palavras`: palavras no título da aba ou visíveis na tela.
+- `palavras_titulo` e `ocr.palavras`: palavras no título da aba ou visíveis na janela,
+  só quando a janela ativa é um navegador (`so_navegador`, lista `navegadores`).
+
+## Visual
+- `modo`: `"parte"` cobre só a área (padrão) | `"tela"` cobre tudo.
+- `margem`: aumenta a área coberta; `suavizar_px`: borda suave (feather).
 
 ## Gore (futuro)
 Veja `bloqueador/detectores/gore.py`: é só plugar um classificador ONNX.

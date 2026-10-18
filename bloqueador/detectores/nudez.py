@@ -111,7 +111,7 @@ class DetectorNudez(Detector):
 
         termos = {c: s * pesos[c] for c, s in melhor.items() if pesos[c]}
         detalhes = [f"{c} {s:.2f}" for c, s in sorted(melhor.items(), key=lambda t: -t[1])
-                    if pesos[c]]
+                    if pesos[c] or c.startswith("FACE")]
         prob = 0.0
         if self.clf and prioridade:
             x1, y1, x2, y2 = reg
@@ -127,14 +127,45 @@ class DetectorNudez(Detector):
                     termos[c] *= cfg["fator_veto"]
             detalhes.append("(veto)")
 
-        # peito feminino sozinho não basta (lutador sem camisa)
+        def s(c):
+            return melhor.get(c, 0)
+
+        # genitália/ânus visível = sinal forte, sempre conta
+        forte = max(s("FEMALE_GENITALIA_EXPOSED"), s("MALE_GENITALIA_EXPOSED"),
+                    s("ANUS_EXPOSED")) >= cfg["score_forte"]
+        # contexto masculino (lutador): peito/rosto de homem e nenhum rosto de mulher
+        masculino = (max(s("MALE_BREAST_EXPOSED"), s("FACE_MALE")) >= 0.3
+                     and s("FACE_FEMALE") < 0.3)
+        if masculino and not forte:
+            # peitoral grande vira "FEMALE_BREAST" no NudeNet: não conta
+            termos.pop("FEMALE_BREAST_EXPOSED", None)
+            detalhes.append("(contexto masculino)")
+
+        # classificador sozinho não basta: precisa de algum sinal de corpo feminino
+        # ou genitália (o classificador dá 0.95 em telas de UFC sem nada explícito)
+        sinais = ["FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "ANUS_EXPOSED",
+                  "BUTTOCKS_EXPOSED", "FACE_FEMALE"]
+        if not masculino:
+            sinais.append("FEMALE_BREAST_EXPOSED")
+        tem_sinal = any(s(c) >= 0.25 for c in sinais)
+        if "classificador" in termos and not tem_sinal:
+            if termos["classificador"] > cfg["teto_classificador_sozinho"]:
+                termos["classificador"] = cfg["teto_classificador_sozinho"]
+                detalhes.append("(classificador sozinho: teto)")
+
+        # peito feminino sozinho não basta
         outros = [c for c, v in termos.items()
                   if v > 0 and c not in ("FEMALE_BREAST_EXPOSED", "classificador")]
         peito = termos.get("FEMALE_BREAST_EXPOSED", 0)
         if peito > cfg["teto_peito_sozinho"] and not outros and prob < 0.5:
             termos["FEMALE_BREAST_EXPOSED"] = cfg["teto_peito_sozinho"]
             detalhes.append("(peito sozinho: teto)")
-        return sum(termos.values()), detalhes
+
+        pontos = sum(termos.values())
+        if masculino and not forte and pontos >= cfg["limiar_bloqueio"]:
+            pontos = cfg["limiar_bloqueio"] * 0.9
+            detalhes.append("(contexto masculino: teto)")
+        return pontos, detalhes
 
     def analisar(self, frame, imagens):
         dets = self._deteccoes(frame)
