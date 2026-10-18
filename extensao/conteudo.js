@@ -66,7 +66,9 @@ function redirecionar() {
     const m = p.match(/^\/shorts\/([\w-]+)/);
     if (m) location.replace("/watch?v=" + m[1]);
   } else if (SITE === "instagram.com") {
-    if (/^\/reels\/?$/.test(p) || /^\/reel\/[\w.-]+/.test(p)) location.replace("/");
+    // /reels/ (aba principal), /usuario/reels/ (aba de reels do perfil) e
+    // /reel/ID (um reel aberto) -> home
+    if (/\/reels?(\/|$)/.test(p)) location.replace("/");
   }
 }
 
