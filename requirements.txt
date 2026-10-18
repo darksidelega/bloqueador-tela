@@ -12,3 +12,5 @@ winrt-Windows.Foundation.Collections
 winrt-Windows.Globalization
 dxcam
 psutil
+customtkinter
+pywin32

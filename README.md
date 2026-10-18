@@ -5,19 +5,23 @@ nenhuma imagem da tela sai do PC.
 
 ## Usar
 - **Instalar.bat**: instala tudo, baixa os modelos (~550 MB), liga o início
-  com o Windows e abre o Painel. Só precisa rodar uma vez.
-- **Painel.bat**: status, liga/desliga das proteções, sensibilidade, senha,
-  pausa, lista de sites e log.
-- **Ctrl + Alt + Shift + Q**: pausa sem abrir o painel (pede a senha).
+  com o Windows e abre o Painel. Só precisa rodar uma vez. Na primeira
+  abertura o Painel pergunta onde criar os atalhos.
+- **Painel** (atalho "Bloqueador de Tela" ou `Painel.bat`): tudo se aplica
+  na hora, sem botão salvar.
+- **Ctrl + Alt + Shift + Q**: pausa sem abrir o painel.
 
-Com senha definida, o painel fica travado: mudar ajustes, pausar ou desligar
-pede a senha.
+## Modo restrito
+Como o "Strict mode" do AppBlock: você escolhe o tempo (1 hora a 1 semana)
+e até acabar não dá para pausar, desligar proteções, diminuir a
+sensibilidade, editar a lista de sites nem desligar o app. Só dá para deixar
+mais rígido. Não tem como cancelar antes.
 
 ## Pastas
 | Pasta | O que tem |
 |---|---|
-| `app/` | código (motor `bloqueador_tela.py`, `guardiao.py`, `painel.py`, `admin.py`) |
-| `dados/` | `config.json`, `sites_bloqueados.txt`, senha (só o hash), status |
+| `app/` | código (motor `bloqueador_tela.py`, `guardiao.py`, `painel.py`, `admin.py`) e ícone em `app/recursos/` |
+| `dados/` | `config.json`, `sites_bloqueados.txt`, modo restrito, status |
 | `modelos/` | modelos de IA (NudeNet + classificador NSFW) |
 | `logs/` | `bloqueador.log` (palavras proibidas aparecem mascaradas, ex: `p**n`) |
 
