@@ -19,6 +19,10 @@ from . import config
 ARQ_CHAVE = os.path.join(config.DADOS, "chave.bin")
 ARQ_PAUSA = os.path.join(config.DADOS, "pausa.json")
 ARQ_RESTRITO = os.path.join(config.DADOS, "restrito.json")
+ARQ_DESBLOQUEIO = os.path.join(config.DADOS, "desbloqueio.json")
+# Modo restrito "sem prazo": guardado com este horário-fim lá no futuro
+# (~ano 3000). Só sai pedindo o desbloqueio e esperando (ver pedir_desbloqueio).
+INDEFINIDO = 32503680000
 NOME_TAREFA = "BloqueadorTela"
 CHAVE_APP = r"Software\BloqueadorTela"
 kernel32 = ctypes.windll.kernel32
@@ -84,14 +88,41 @@ def _restrito_gravado():
 _restrito_memoria = 0
 
 
+def _restrito_bruto():
+    """Horário-fim gravado (arquivo/registro/memória), sem olhar o relógio nem
+    o pedido de desbloqueio. INDEFINIDO = modo sem prazo."""
+    return max(_restrito_memoria, *_restrito_gravado())
+
+
 def restrito_ate():
-    """Até quando o modo restrito vale (epoch), ou 0 se desligado."""
-    ate = max(_restrito_memoria, *_restrito_gravado())
-    return ate if ate > time.time() else 0
+    """Até quando o modo restrito vale (epoch), ou 0 se desligado. No modo sem
+    prazo devolve o fim do pedido de desbloqueio, ou INDEFINIDO se não há."""
+    bruto = _restrito_bruto()
+    if bruto <= time.time():
+        return 0
+    if bruto >= INDEFINIDO:  # sem prazo: só acaba quando a espera é cumprida
+        d = _ler(ARQ_DESBLOQUEIO, "desbloqueio")
+        if d and d <= time.time():
+            return 0
+    return bruto
 
 
 def restrito_ativo():
     return restrito_ate() > 0
+
+
+def restrito_indefinido():
+    """True se o modo restrito está ligado e é do tipo "sem prazo"."""
+    return restrito_ativo() and _restrito_bruto() >= INDEFINIDO
+
+
+def desbloqueio_em():
+    """Epoch em que o modo restrito sem prazo vai se desligar (pedido de
+    desbloqueio em andamento), ou 0 se não há pedido."""
+    if _restrito_bruto() < INDEFINIDO:
+        return 0
+    d = _ler(ARQ_DESBLOQUEIO, "desbloqueio")
+    return d if d > time.time() else 0
 
 
 def _gravar_restrito(ate):
@@ -99,15 +130,62 @@ def _gravar_restrito(ate):
     _registro({"ate": ate, "assinatura": _assinatura("restrito", ate)})
 
 
+def _apagar_restrito():
+    """Desliga o modo restrito de vez: apaga os registros e o pedido de
+    desbloqueio."""
+    for arq in (ARQ_RESTRITO, ARQ_DESBLOQUEIO):
+        try:
+            os.remove(arq)
+        except OSError:
+            pass
+    _registro({"ate": 0, "assinatura": _assinatura("restrito", 0)})
+
+
 def ativar_restrito(minutos):
-    """Liga (ou estende) o modo restrito. Nunca encurta."""
+    """Liga (ou estende) o modo restrito com prazo. Nunca encurta."""
     novo = not restrito_ativo()
     ate = int(max(restrito_ate(), time.time() + minutos * 60))
+    if ate >= INDEFINIDO:  # já estava sem prazo: continua sem prazo
+        ate = INDEFINIDO
     if novo or _ler_cfg_restrito() is None:
         _guardar_cfg_restrito(config.carregar())
     _gravar_restrito(ate)
     cancelar_pausa()
     return ate
+
+
+def ativar_restrito_livre():
+    """Liga o modo restrito "sem prazo" (como o Strict do ScreenZen): não tem
+    hora para acabar; só sai com pedir_desbloqueio() + espera. Nunca encurta."""
+    if not restrito_ativo() or _ler_cfg_restrito() is None:
+        _guardar_cfg_restrito(config.carregar())
+    cancelar_desbloqueio()  # começar sem prazo cancela qualquer pedido pendente
+    _gravar_restrito(INDEFINIDO)
+    cancelar_pausa()
+    return INDEFINIDO
+
+
+def pedir_desbloqueio():
+    """Começa a espera para sair do modo restrito sem prazo. Devolve o epoch em
+    que vai desligar, ou 0 se não se aplica. Não reinicia um pedido em andamento
+    (não dá para "renovar" para ganhar tempo) nem o encurta."""
+    if not restrito_indefinido():
+        return 0
+    atual = _ler(ARQ_DESBLOQUEIO, "desbloqueio")
+    if atual and atual > time.time():
+        return atual
+    espera = config_efetivo().get("espera_desbloqueio_min", 30)
+    d = int(time.time() + max(1, espera) * 60)
+    _gravar(ARQ_DESBLOQUEIO, "desbloqueio", d)
+    return d
+
+
+def cancelar_desbloqueio():
+    """Desiste do desbloqueio: o modo restrito sem prazo volta a travar."""
+    try:
+        os.remove(ARQ_DESBLOQUEIO)
+    except OSError:
+        pass
 
 
 _relogio = None  # (hora do relógio, tempo desde que o PC ligou) da última volta
@@ -128,22 +206,36 @@ def vigiar_restrito():
     do_arq, do_reg = _restrito_gravado()
     ate = max(_restrito_memoria, do_arq, do_reg)
     agora, ligado = time.time(), _ms_ligado() / 1000
+    sem_prazo = ate >= INDEFINIDO
+    d = _ler(ARQ_DESBLOQUEIO, "desbloqueio") if sem_prazo else 0
     if _relogio and ate:
-        # o relógio andou bem mais que o tempo de verdade: adiantaram a hora
+        # o relógio andou bem mais que o tempo de verdade: adiantaram a hora.
+        # Estende o prazo (ou empurra a espera de desbloqueio) na mesma medida,
+        # senão dava para pular o tempo só mudando o relógio.
         pulo = (agora - _relogio[0]) - (ligado - _relogio[1])
         if pulo > 120:
-            ate += int(pulo)
+            if not sem_prazo:
+                ate += int(pulo)
+            if d:
+                d += int(pulo)
+                try:
+                    _gravar(ARQ_DESBLOQUEIO, "desbloqueio", d)
+                except OSError:
+                    pass
             print(f"Relógio adiantado {pulo / 3600:.1f} h: o modo restrito foi estendido igual.")
     _relogio = (agora, ligado)
-    if ate <= agora:
+    # desliga: prazo acabou, ou a espera de desbloqueio foi cumprida
+    if ate <= agora or (sem_prazo and d and d <= agora):
         _restrito_memoria = 0
+        _apagar_restrito()
         vigia(False)
         return False
     _restrito_memoria = ate
     vigia(True)
-    if do_arq != ate or do_reg != ate:
+    alvo = INDEFINIDO if sem_prazo else ate
+    if do_arq != alvo or do_reg != alvo:
         try:
-            _gravar_restrito(ate)  # alguém apagou ou mexeu: regrava
+            _gravar_restrito(alvo)  # alguém apagou ou mexeu: regrava
         except OSError:
             pass
     garantir_autostart()
@@ -196,6 +288,9 @@ def mais_rigido(base, novo):
                   "limiar_grande", "regiao_grande_cobrir"):
         cfg[chave] = min(base[chave], novo[chave])
     cfg["margem"] = max(base["margem"], novo["margem"])
+    # espera de desbloqueio só pode aumentar (esperar mais é mais rígido)
+    cfg["espera_desbloqueio_min"] = max(base["espera_desbloqueio_min"],
+                                        novo["espera_desbloqueio_min"])
     if "tela" in (base["modo"], novo["modo"]):
         cfg["modo"] = "tela"
     for chaves in config.LISTAS + (("navegadores",),):
@@ -204,7 +299,7 @@ def mais_rigido(base, novo):
             pai, de_novo = pai[k], de_novo[k]
         k = chaves[-1]
         pai[k] = pai[k] + [p for p in de_novo[k] if p not in pai[k]]
-    for chave in ("lembrete_pausa", "bloqueio_rapido_min", "suavizar_px", "debug"):
+    for chave in ("lembrete_pausa", "bloqueio_rapido_min", "suavizar_px", "debug", "dias_log"):
         cfg[chave] = novo[chave]
     return cfg
 
@@ -319,6 +414,7 @@ def _arquivos_protegidos():
                     yield os.path.join(raiz, n), False
     yield ARQ_CHAVE, False
     yield ARQ_RESTRITO, True  # o Painel precisa poder regravar (estender)
+    yield ARQ_DESBLOQUEIO, True  # o Painel pede/cancela o desbloqueio
     yield ARQ_CFG_RESTRITO, True
     # o Python e as bibliotecas que este processo usa: apagar uma delas
     # impediria o app de abrir de novo

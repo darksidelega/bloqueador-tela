@@ -803,11 +803,16 @@ def janela_pausa(root, ao_confirmar):
     fonte = ("Segoe UI", 11)
     ate = protecao.restrito_ate()
     if ate:
+        if protecao.restrito_indefinido():
+            d = protecao.desbloqueio_em()
+            quando = ("Desbloqueia às " + time.strftime("%H:%M", time.localtime(d)) + "."
+                      if d else "Sem prazo: peça o desbloqueio no Painel e espere.")
+        else:
+            quando = "Não dá para pausar até " + time.strftime("%d/%m às %H:%M",
+                                                               time.localtime(ate)) + "."
         tk.Label(jan, text="🔒  Modo restrito ativo", font=("Segoe UI", 13, "bold"),
                  bg="white").pack(anchor="w")
-        tk.Label(jan, text="Não dá para pausar até " +
-                 time.strftime("%d/%m às %H:%M", time.localtime(ate)) + ".",
-                 font=fonte, bg="white").pack(anchor="w", pady=(4, 10))
+        tk.Label(jan, text=quando, font=fonte, bg="white").pack(anchor="w", pady=(4, 10))
         tk.Button(jan, text="Ok", width=10, command=jan.destroy).pack()
     else:
         tk.Label(jan, text="Pausar o bloqueador por:", font=("Segoe UI", 13, "bold"),

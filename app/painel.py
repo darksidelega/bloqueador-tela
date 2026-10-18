@@ -1,7 +1,8 @@
 """Painel do Bloqueador de Tela.
 
-Tudo se aplica na hora (sem botão salvar). Modo restrito: até o horário
-escolhido não dá para pausar nem desligar nada, só deixar mais rígido.
+Tudo se aplica na hora (sem botão salvar). Modo restrito: por um prazo ou sem
+prazo (sai só pedindo desbloqueio e esperando) não dá para pausar nem desligar
+nada, só deixar mais rígido.
 """
 import copy
 import ctypes
@@ -178,12 +179,18 @@ INFO = {
     ]),
     "restrito": ("🔒 Modo restrito", [
         ("Como funciona",
-         "Você escolhe por quanto tempo (1 hora a 1 semana). Até acabar não dá para "
-         "pausar, desligar proteções, baixar a sensibilidade, editar a lista de sites "
-         "nem desligar o app, nem pelo painel nem pelo atalho de teclado."),
+         "Você escolhe por quanto tempo (1 hora a 1 semana) ou \"Sem prazo\". Até acabar "
+         "não dá para pausar, desligar proteções, baixar a sensibilidade, editar a lista "
+         "de sites nem desligar o app, nem pelo painel nem pelo atalho de teclado."),
+        ("Sem prazo",
+         "Não tem hora para acabar. Para sair você toca em \"Desbloquear\" e espera um "
+         "tempo (30 min de padrão, ajustável no config.json) com tudo ainda travado — dá "
+         "tempo de a vontade passar. Pode cancelar a espera a qualquer momento. É o jeito "
+         "mais firme, como o modo estrito do ScreenZen."),
         ("O que ainda dá",
-         "Deixar mais rígido: ligar proteções, aumentar a sensibilidade ou estender o tempo."),
-        ("Atenção", "Não tem como cancelar antes. Comece com 1 hora para conhecer."),
+         "Deixar mais rígido: ligar proteções, aumentar a sensibilidade, estender o tempo "
+         "ou aumentar a espera de desbloqueio."),
+        ("Atenção", "Com prazo não tem como cancelar antes. Comece com 1 hora para conhecer."),
     ]),
     "forte": ("🛡️ Proteção forte", [
         ("Como funciona",
@@ -575,15 +582,21 @@ class Painel(ctk.CTk):
 
     def restrito(self):
         ativo = protecao.restrito_ativo()
-        opcoes = [("1 hora", 60), ("4 horas", 240), ("1 dia", 1440), ("3 dias", 4320),
-                  ("1 semana", 10080)]
-        texto = ("Até o fim do tempo não será possível pausar, desligar proteções,\n"
-                 "diminuir a sensibilidade nem desligar o app. Não dá para cancelar.")
+        espera = self.cfg.get("espera_desbloqueio_min", 30)
+        opcoes = [("1 hora", 60), ("4 horas", 240), ("1 dia", 1440),
+                  ("1 semana", 10080), ("Sem prazo", "livre")]
+        texto = ("Enquanto durar, não dá para pausar, desligar proteções, diminuir\n"
+                 "a sensibilidade nem fechar o app.\n"
+                 f"\"Sem prazo\" não tem hora para acabar: para sair você pede o\n"
+                 f"desbloqueio e espera {espera} min (dá tempo de a vontade passar).")
         self._escolher("Estender modo restrito" if ativo else "Ativar modo restrito",
                        texto, opcoes, self._ativar_restrito, perigo=True)
 
     def _ativar_restrito(self, minutos):
-        ate = protecao.ativar_restrito(minutos)
+        if minutos == "livre":
+            ate = protecao.ativar_restrito_livre()
+        else:
+            ate = protecao.ativar_restrito(minutos)
         # garante que está tudo ligado e voltando sozinho
         if not protecao.esta_rodando("app"):
             protecao.iniciar_app()
@@ -592,7 +605,31 @@ class Painel(ctk.CTk):
             self.vars["autostart"].set(True)
         if not protecao.esta_rodando("guardiao"):
             protecao.iniciar_guardiao()
-        self.avisar("🔒 Modo restrito até " + time.strftime("%d/%m %H:%M", time.localtime(ate)), ACENTO)
+        if ate >= protecao.INDEFINIDO:
+            self.avisar("🔒 Modo restrito sem prazo. Para sair, peça o desbloqueio.", ACENTO)
+        else:
+            self.avisar("🔒 Modo restrito até " + time.strftime("%d/%m %H:%M", time.localtime(ate)),
+                        ACENTO)
+
+    def _desbloquear(self):
+        espera = self.cfg.get("espera_desbloqueio_min", 30)
+
+        def confirmar(_):
+            d = protecao.pedir_desbloqueio()
+            if d:
+                self.avisar("⏳ Desbloqueio pedido: o modo restrito sai às "
+                            + time.strftime("%H:%M", time.localtime(d))
+                            + ". Até lá continua travado.", LARANJA, 12)
+
+        self._escolher(
+            "Desbloquear o modo restrito",
+            f"O modo restrito vai se desligar daqui a {espera} minutos.\n"
+            "Até lá continua tudo travado. Dá para cancelar quando quiser.",
+            [(f"Esperar {espera} min", "ok")], confirmar, perigo=True)
+
+    def _cancelar_desbloqueio(self):
+        protecao.cancelar_desbloqueio()
+        self.avisar("Desbloqueio cancelado: continua travado.", ACENTO)
 
     def bloqueio_rapido(self):
         ate = protecao.bloqueio_rapido()
@@ -845,17 +882,36 @@ class Painel(ctk.CTk):
             self.vars["ligado"].set(rodando or (not pausa and protecao.esta_rodando("app")))
 
         ate = protecao.restrito_ate()
-        if ate:
+        if not ate:
+            self.lb_restrito.configure(
+                text="Trava tudo por um tempo: ninguém consegue pausar nem desligar, nem você.",
+                text_color=TEXTO2)
+            self.bt_restrito.configure(text="Ativar", command=self.restrito,
+                                       fg_color=ACENTO, hover_color=ACENTO_HOVER)
+        elif protecao.restrito_indefinido():
+            d = protecao.desbloqueio_em()
+            if d:
+                self.lb_restrito.configure(
+                    text=f"Sem prazo. Desbloqueia em {falta(d)} "
+                         f"({time.strftime('%H:%M', time.localtime(d))}). "
+                         "Toque em Cancelar para voltar a travar.",
+                    text_color=LARANJA)
+                self.bt_restrito.configure(text="Cancelar", command=self._cancelar_desbloqueio,
+                                           fg_color=ACENTO, hover_color=ACENTO_HOVER)
+            else:
+                self.lb_restrito.configure(
+                    text="Ativo sem prazo. Para sair, peça o desbloqueio e espere "
+                         f"{self.cfg.get('espera_desbloqueio_min', 30)} min.",
+                    text_color=ACENTO)
+                self.bt_restrito.configure(text="Desbloquear", command=self._desbloquear,
+                                           fg_color=VERMELHO, hover_color=("#B91C1C", "#DC2626"))
+        else:
             self.lb_restrito.configure(
                 text=f"Ativo até {time.strftime('%d/%m às %H:%M', time.localtime(ate))} "
                      f"(faltam {falta(ate)}). Só dá para deixar mais rígido.",
                 text_color=ACENTO)
-            self.bt_restrito.configure(text="Estender")
-        else:
-            self.lb_restrito.configure(
-                text="Trava tudo por um tempo: ninguém consegue pausar nem desligar, nem você.",
-                text_color=TEXTO2)
-            self.bt_restrito.configure(text="Ativar")
+            self.bt_restrito.configure(text="Estender", command=self.restrito,
+                                       fg_color=ACENTO, hover_color=ACENTO_HOVER)
         estado = "disabled" if ate else "normal"
         self.sw_ligado.configure(state=estado)
         self.bt_desligar.configure(state=estado)

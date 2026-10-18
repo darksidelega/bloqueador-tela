@@ -145,6 +145,10 @@ PADRAO = {
     # Bloqueio rápido (botão no Painel ou Ctrl + Alt + Shift + B): liga o modo
     # restrito por este tempo, sem perguntar nada.
     "bloqueio_rapido_min": 30,
+    # Modo restrito "sem prazo" (como o Strict do ScreenZen): não tem hora para
+    # acabar; para sair, você pede o desbloqueio e espera estes minutos (dá
+    # tempo de a vontade passar). No modo restrito só dá para aumentar a espera.
+    "espera_desbloqueio_min": 30,
     # Com conteúdo sensível na tela, PrtSc e Win+Shift+S são ignorados e
     # estes apps de print são fechados se abrirem.
     "apps_de_print": ["screenclippinghost.exe", "snippingtool.exe", "lightshot.exe",
