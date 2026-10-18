@@ -250,11 +250,17 @@ class DetectorNudez(Detector):
             return max([s * pesos.get(c, 0) for c, s, a, b, cc, d in dets
                         if somar and rg.contem(reg, (a + cc) / 2, (b + d) / 2)] + [0])
         ordem = sorted(regs, key=lambda r: (-sinal(r), -rg.area(r[0])))
+        H, W = frame.shape[:2]
+        grande = self.cfg["regiao_grande_cobrir"] * W * H
         achados = []
         for i, (reg, somar) in enumerate(ordem):
             pontos, detalhes = self._pontuar(frame, reg, dets, i < self.max_regioes, somar)
             if not detalhes:
                 continue
-            achados.append(Achado(reg, pontos, pontos >= self.cfg["limiar_bloqueio"],
-                                  self.nome, detalhes))
+            # cobrir uma área enorme (quase a tela toda) num falso positivo é o
+            # pior caso: exige nota bem mais alta do que cobrir uma miniatura.
+            limiar = self.cfg["limiar_bloqueio"]
+            if rg.area(reg) > grande:
+                limiar = max(limiar, self.cfg["limiar_grande"])
+            achados.append(Achado(reg, pontos, pontos >= limiar, self.nome, detalhes))
         return achados

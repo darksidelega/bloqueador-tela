@@ -442,14 +442,19 @@ class Estado:
         # páginas com muitas fotos sensíveis + palavra: {hwnd: título}
         # ficam cobertas inteiras até mudar de página
         self.paginas_travadas = {}
+        self.sensivel_qtd = 0    # quantas fotos sensíveis na última análise
+
+    # cobrir a janela/tela inteira (ao rolar, Alt+Tab) só com várias fotos
+    # sensíveis: uma só não escurece a página toda (segurança p/ falso positivo)
+    MIN_COBRIR_TUDO = 2
 
     def com_imagens(self, hwnd, titulo=None):
-        """Esta página (mesma janela e mesmo título) está mostrando fotos
-        sensíveis agora? Palavra sozinha não conta, nem a página anterior da
-        mesma janela do Chrome."""
+        """Esta página (mesma janela e mesmo título) está mostrando VÁRIAS
+        fotos sensíveis agora? Palavra sozinha não conta, nem a página anterior
+        da mesma janela do Chrome, nem uma única foto."""
         if titulo is None:
             titulo = titulo_janela(hwnd)
-        return (time.time() < self.sensivel_ate
+        return (time.time() < self.sensivel_ate and self.sensivel_qtd >= self.MIN_COBRIR_TUDO
                 and self.janelas_sensiveis.get(hwnd, (None,))[0] == titulo)
 
     def rolando_sensivel(self):
@@ -625,6 +630,7 @@ class Trabalhador:
                 estado.versao += 1
                 self.ultimo_achado = agora
                 estado.sensivel_ate = agora + 3
+                estado.sensivel_qtd = len(caixas)
             elif estado.patches and agora - self.ultimo_achado > cfg["persistencia"]:
                 estado.patches = []
                 estado.versao += 1

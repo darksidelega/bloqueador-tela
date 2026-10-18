@@ -192,7 +192,8 @@ def mais_rigido(base, novo):
                   "bloquear_sites", "forcar_safesearch"):
         cfg[chave] = base[chave] or novo[chave]
     cfg["ocr"]["ativo"] = base["ocr"]["ativo"] or novo["ocr"]["ativo"]
-    for chave in ("limiar_bloqueio", "limiar_com_palavra", "travar_pagina_fotos"):
+    for chave in ("limiar_bloqueio", "limiar_com_palavra", "travar_pagina_fotos",
+                  "limiar_grande", "regiao_grande_cobrir"):
         cfg[chave] = min(base[chave], novo[chave])
     cfg["margem"] = max(base["margem"], novo["margem"])
     if "tela" in (base["modo"], novo["modo"]):

@@ -49,6 +49,10 @@ PADRAO = {
     # Pontuação: cada região soma score*peso (maior score de cada classe)
     # e o score do classificador * peso_classificador. Bloqueia se >= limiar.
     "limiar_bloqueio": 1.0,
+    # Região enorme (acima desta fração da tela) só bloqueia com nota bem mais
+    # alta: cobrir a página toda num falso positivo é o pior caso.
+    "regiao_grande_cobrir": 0.35,
+    "limiar_grande": 2.5,
     # Palavra proibida (título da aba ou texto da página) não cobre nada
     # sozinha: só baixa o limiar das imagens daquela janela para este valor.
     "limiar_com_palavra": 0.4,
