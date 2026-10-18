@@ -5,7 +5,7 @@ nenhuma imagem da tela sai do PC.
 
 ## Instalar e usar
 1. `1_instalar.bat`: cria o `.venv`, instala tudo e baixa os modelos (~550 MB).
-2. `2_iniciar.bat`: inicia o bloqueador (`2_iniciar_com_log.bat` mostra o DEBUG).
+2. `2_iniciar.bat`: inicia o bloqueador (sem janela; o DEBUG vai para `logs/bloqueador.log`, abra com `ver_log.bat`).
 3. `4_ativar_protecao.bat` (admin): define a senha, inicia com o Windows,
    reinicia sozinho se for fechado e bloqueia os sites.
 4. `Ctrl+Alt+Shift+Q`: pede a senha e pausa por N minutos.

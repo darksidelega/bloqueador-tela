@@ -9,6 +9,7 @@ Fechar/pausar: Ctrl + Alt + Shift + Q (pede a senha, se houver)
 """
 import ctypes
 import os
+import re
 import sys
 import threading
 import time
@@ -82,6 +83,21 @@ def mosaico(frame, x1, y1, x2, y2, bloco):
     return Image.fromarray(cv2.cvtColor(grande, cv2.COLOR_BGR2RGB))
 
 
+def janelas_ignoradas(cfg):
+    lista = cfg.get("ignorar_janelas", []) + cfg["ocr"].get("ignorar_janelas", [])
+    return [j.lower() for j in lista]
+
+
+def mascarar(texto, palavras):
+    """Troca 'porn' por 'p**n' no log, para o log nunca disparar o bloqueio
+    (pelo OCR ou pelo título) quando você abre ele."""
+    for p in sorted(palavras, key=len, reverse=True):
+        if len(p) >= 3:
+            texto = re.sub(re.escape(p), lambda m: m.group()[0] + "*" * (len(m.group()) - 2)
+                           + m.group()[-1], texto, flags=re.IGNORECASE)
+    return texto
+
+
 def titulo_janela():
     try:
         hwnd = user32.GetForegroundWindow()
@@ -98,6 +114,7 @@ class Saida:
 
     lock = threading.Lock()
     local = threading.local()
+    palavras = []
 
     def __init__(self, console, caminho):
         self.console = console
@@ -111,6 +128,7 @@ class Saida:
             return
         corte = buf.rindex("\n") + 1
         self.local.buf, txt = buf[corte:], buf[:corte]
+        txt = mascarar(txt, Saida.palavras)
         with self.lock:
             self.arq.write(txt)
             if self.console:
@@ -182,6 +200,7 @@ class Trabalhador:
     def __init__(self, monitor, estado, cfg):
         self.monitor, self.estado, self.cfg = monitor, estado, cfg
         self.palavras = [p.lower() for p in cfg["palavras_titulo"]]
+        self.ignorar = janelas_ignoradas(cfg)
         self.ultimo_achado = 0.0
         self.ultimo_log = ""
         self.ultimo_titulo_ruim = None
@@ -210,7 +229,9 @@ class Trabalhador:
         t1 = time.perf_counter()
 
         titulo = titulo_janela()
-        titulo_ruim = any(p in titulo for p in self.palavras) or time.time() < estado.ocr_ate
+        ignorada = any(j in titulo for j in self.ignorar)
+        titulo_ruim = not ignorada and (any(p in titulo for p in self.palavras)
+                                        or time.time() < estado.ocr_ate)
         if not mudou and titulo_ruim == self.ultimo_titulo_ruim:
             # tela parada: mantém o que está e não gasta CPU/GPU
             self.parados += 1
@@ -301,7 +322,7 @@ def vigiar_ocr(monitor, estado, cfg):
     except Exception as e:
         print("OCR desligado:", e)
         return
-    ignorar = [j.lower() for j in oc["ignorar_janelas"]]
+    ignorar = janelas_ignoradas(cfg)
     with mss.MSS() as sct:
         while estado.rodando:
             time.sleep(oc["intervalo"])
@@ -397,6 +418,7 @@ def main():
     configurar_log()
     protecao.cancelar_pausa()  # abriu o app = quer proteção agora
     cfg = config.carregar()
+    Saida.palavras = cfg["palavras_titulo"] + cfg["ocr"]["palavras"]
     tornar_dpi_aware()
     with mss.MSS() as sct:
         monitor = dict(sct.monitors[1])  # monitor principal
@@ -431,6 +453,8 @@ def main():
                 return
             if dialogo[0] is None or not dialogo[0].winfo_exists():
                 dialogo[0] = janela_senha(overlay.root, fechar)
+        if dialogo[0] is not None and dialogo[0].winfo_exists():
+            dialogo[0].lift()  # senha sempre por cima do mosaico
         with estado.lock:
             patches = list(estado.patches)
             versao = estado.versao

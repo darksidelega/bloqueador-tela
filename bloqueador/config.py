@@ -83,13 +83,15 @@ PADRAO = {
             "porn", "pornô", "porno", "pornhub", "xvideos", "xnxx", "xhamster",
             "redtube", "youporn", "hentai", "brazzers", "onlyfans", "chaturbate",
             "spankbang", "rule34", "nhentai"
-        ],
-        # janelas onde o OCR não age (ex: você editando esta lista)
-        "ignorar_janelas": [
-            "visual studio code", "bloco de notas", "notepad", "powershell",
-            "prompt de comando", "terminal", "sites_bloqueados", "config.json"
         ]
     },
+    # Janelas onde título e OCR não bloqueiam (você editando listas/logs,
+    # terminal, Claude). A detecção de imagens continua valendo nelas.
+    "ignorar_janelas": [
+        "claude", "windows terminal", "terminal", "powershell", "prompt de comando",
+        "cmd.exe", "python", "visual studio code", "bloco de notas", "notepad",
+        "bloqueador.log", "sites_bloqueados", "config.json", "bloqueador-tela"
+    ],
     "sites_bloqueados": "sites_bloqueados.txt",
     "forcar_safesearch": True    # Google/Bing/DuckDuckGo sempre com SafeSearch
 }
