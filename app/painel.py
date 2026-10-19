@@ -8,6 +8,7 @@ import copy
 import ctypes
 import json
 import os
+import re
 import threading
 import time
 
@@ -59,6 +60,11 @@ def emoji(pai, texto, tam=20, lado=40):
     texto = texto.replace("️", "")  # o Tk desenha esse seletor como espaço
     ctk.CTkLabel(caixa, text=texto, font=fonte(tam)).place(relx=0.5, rely=0.5, anchor="center")
     return caixa
+
+
+def hora_valida(s):
+    """True se `s` é um horário "HH:MM" válido (00:00 a 23:59)."""
+    return bool(re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", (s or "").strip()))
 
 
 def falta(ate):
@@ -192,6 +198,28 @@ INFO = {
          "ou aumentar a espera de desbloqueio."),
         ("Atenção", "Com prazo não tem como cancelar antes. Comece com 1 hora para conhecer."),
     ]),
+    "horario": ("🌙 Modo horário", [
+        ("Como funciona",
+         "Liga o Modo restrito sozinho todo dia dentro da faixa de horas que você escolher "
+         "(ex.: 23:00 às 06:00). Enquanto a faixa dura, vale tudo do Modo restrito: não dá "
+         "para pausar nem desligar. Fora dela, volta ao normal."),
+        ("Por que usar",
+         "Para travar de madrugada ou nos horários em que você costuma cair em tentação, "
+         "sem precisar lembrar de ligar."),
+        ("Offline", "Usa só o relógio do PC; não precisa de internet."),
+    ]),
+    "excecoes": ("🎮 Exceções", [
+        ("Como funciona",
+         "Lista de apps ou janelas em que o bloqueador não cobre nada enquanto estão em "
+         "primeiro plano. Casa por um pedaço do título da janela ou pelo nome do programa "
+         "(.exe)."),
+        ("Para que serve",
+         "Para transmissões de luta (UFC), jogos em tela cheia e afins, que às vezes a IA "
+         "cobre por engano. Ex.: \"ea sports ufc\", \"eldenring.exe\", \"vlc.exe\"."),
+        ("Cuidado",
+         "O que estiver na lista fica totalmente liberado; use só com o que você confia. "
+         "No Modo restrito a lista não pode ser alterada."),
+    ]),
     "forte": ("🛡️ Proteção forte", [
         ("Como funciona",
          "Cria uma tarefa no Agendador do Windows que, a cada minuto, confere se o "
@@ -297,6 +325,33 @@ class Painel(ctk.CTk):
                                          font=fonte(12, "bold"), command=self.restrito)
         self.bt_restrito.pack(side="right")
         self._bt_info(f, "restrito").pack(side="right", padx=(0, 6))
+        # modo horário: liga o Modo restrito sozinho numa faixa de horas
+        f = ctk.CTkFrame(c, fg_color="transparent")
+        f.pack(fill="x", padx=12, pady=(2, 5))
+        emoji(f, "🌙").pack(side="left")
+        t = ctk.CTkFrame(f, fg_color="transparent")
+        t.pack(side="left", fill="x", expand=True, padx=(4, 8))
+        ctk.CTkLabel(t, text="Modo horário", font=fonte(13, "bold"), anchor="w").pack(fill="x")
+        ctk.CTkLabel(t, text="Liga o Modo restrito sozinho nesta faixa de horas",
+                     font=fonte(11), text_color=TEXTO2, anchor="w", justify="left",
+                     wraplength=200).pack(fill="x")
+        hr = self.cfg["horario_restrito"]
+        var = ctk.BooleanVar(value=hr["ativo"])
+        sw = ctk.CTkSwitch(f, text="", variable=var, width=46, progress_color=ACENTO,
+                           command=self._alternar_horario)
+        sw.pack(side="right")
+        self._bt_info(f, "horario").pack(side="right", padx=(0, 6))
+        self.ent_fim = ctk.CTkEntry(f, width=52, height=28, justify="center", font=fonte(12))
+        self.ent_fim.insert(0, hr["fim"])
+        self.ent_fim.pack(side="right", padx=(0, 6))
+        ctk.CTkLabel(f, text="às", font=fonte(11), text_color=TEXTO2).pack(side="right", padx=2)
+        self.ent_ini = ctk.CTkEntry(f, width=52, height=28, justify="center", font=fonte(12))
+        self.ent_ini.insert(0, hr["inicio"])
+        self.ent_ini.pack(side="right")
+        self.vars["horario"] = var
+        for e in (self.ent_ini, self.ent_fim):
+            e.bind("<FocusOut>", lambda _e: self._salvar_horario())
+            e.bind("<Return>", lambda _e: self._salvar_horario())
         self._linha(c, "🛡️", "Proteção forte", "O Windows reabre o app em até 1 min se fecharem",
                     "forte", protecao.tarefa_existe(), self._alternar)
         ctk.CTkFrame(c, fg_color="transparent", height=6).pack()
@@ -328,6 +383,22 @@ class Painel(ctk.CTk):
                                          text_color=ACENTO, hover_color=BORDA, font=fonte(11),
                                          command=self.instalar_extensao)
         self.bt_extensao.pack(side="right", padx=(0, 6))
+        # exceções: apps/janelas onde nada é coberto
+        f = ctk.CTkFrame(c, fg_color="transparent")
+        f.pack(fill="x", padx=12, pady=5)
+        emoji(f, "🎮").pack(side="left")
+        t = ctk.CTkFrame(f, fg_color="transparent")
+        t.pack(side="left", fill="x", expand=True, padx=(4, 8))
+        ctk.CTkLabel(t, text="Exceções", font=fonte(13, "bold"), anchor="w").pack(fill="x")
+        ctk.CTkLabel(t, text="Apps/janelas onde o app não cobre nada (UFC, jogos)",
+                     font=fonte(11), text_color=TEXTO2, anchor="w", justify="left",
+                     wraplength=280).pack(fill="x")
+        self.bt_excecoes = ctk.CTkButton(f, text="Editar", width=90, height=26,
+                                         fg_color="transparent", border_width=1, border_color=BORDA,
+                                         text_color=ACENTO, hover_color=BORDA, font=fonte(11),
+                                         command=self.editar_excecoes)
+        self.bt_excecoes.pack(side="right", padx=(0, 6))
+        self._bt_info(f, "excecoes").pack(side="right", padx=(0, 6))
         ctk.CTkFrame(c, fg_color="transparent", height=6).pack()
 
     def _cartao_cobrir(self):
@@ -385,6 +456,69 @@ class Painel(ctk.CTk):
         config.salvar(cfg)
         self.cfg = cfg
         self.avisar("Aplicado ✓", VERDE)
+
+    def _alternar_horario(self):
+        if protecao.restrito_ativo() and not self.vars["horario"].get():
+            self.vars["horario"].set(True)
+            self.avisar("🔒 Modo restrito: não dá para desligar o modo horário.", LARANJA)
+            return
+        self._salvar_horario()
+
+    def _salvar_horario(self):
+        ini, fim = self.ent_ini.get().strip(), self.ent_fim.get().strip()
+        if not (hora_valida(ini) and hora_valida(fim)):
+            self.avisar("Horário inválido. Use HH:MM (ex.: 23:00).", VERMELHO, 8)
+            return
+        novo = {"ativo": bool(self.vars["horario"].get()), "inicio": ini, "fim": fim}
+        if novo == self.cfg.get("horario_restrito"):
+            return  # nada mudou (ex.: só saiu do campo): não salva nem avisa à toa
+        cfg = config.carregar()
+        cfg["horario_restrito"] = novo
+        config.salvar(cfg)
+        self.cfg = cfg
+        self.avisar("Aplicado ✓", VERDE)
+
+    def editar_excecoes(self):
+        if protecao.restrito_ativo():
+            self.avisar("🔒 Modo restrito: a lista de exceções não pode mudar agora.", LARANJA)
+            return
+        if self.popup and self.popup.winfo_exists():
+            self.popup.focus()
+            return
+        j = self.popup = ctk.CTkToplevel(self, fg_color=CARTAO)
+        j.title("Exceções")
+        j.resizable(False, False)
+        j.transient(self)
+        por_icone(j)
+        ctk.CTkLabel(j, text="Exceções", font=fonte(17, "bold")).pack(anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(j, text="Uma por linha: um pedaço do título da janela ou o nome do .exe.\n"
+                     "Enquanto esse app/janela estiver na frente, nada é coberto.\n"
+                     "Ex.: ea sports ufc  |  eldenring.exe  |  vlc.exe",
+                     font=fonte(12), text_color=TEXTO2, justify="left").pack(anchor="w", padx=20)
+        cx = ctk.CTkTextbox(j, width=380, height=150, font=fonte(12))
+        cx.pack(padx=20, pady=12, fill="both")
+        cx.insert("1.0", "\n".join(self.cfg.get("excecoes", [])))
+
+        def salvar():
+            linhas, vistos = [], set()
+            for linha in cx.get("1.0", "end").splitlines():
+                e = linha.strip().lower()
+                if e and e not in vistos:
+                    vistos.add(e)
+                    linhas.append(e)
+            cfg = config.carregar()
+            cfg["excecoes"] = linhas
+            config.salvar(cfg)
+            self.cfg = cfg
+            j.destroy()
+            self.avisar(f"Exceções salvas ✓ ({len(linhas)})", VERDE)
+
+        ctk.CTkButton(j, text="Salvar", width=100, fg_color=ACENTO, hover_color=ACENTO_HOVER,
+                      font=fonte(12, "bold"), command=salvar).pack(pady=(0, 8))
+        ctk.CTkButton(j, text="Cancelar", fg_color="transparent", text_color=TEXTO2,
+                      hover_color=BORDA, command=j.destroy).pack(pady=(0, 14))
+        centralizar(j, self)
+        j.after(100, j.grab_set)
 
     def _cartao_sistema(self):
         c = self._cartao("Sistema")
@@ -718,6 +852,8 @@ class Painel(ctk.CTk):
         padrao["lembrete_pausa"] = atual["lembrete_pausa"]
         padrao["esconder_previas"] = atual["esconder_previas"]  # mexe na barra: não reseta
         padrao["bloquear_shorts"] = atual["bloquear_shorts"]
+        padrao["excecoes"] = atual["excecoes"]  # lista do usuário, não reseta
+        padrao["horario_restrito"] = atual["horario_restrito"]
         config.salvar(padrao)
         self.cfg = padrao
         self.vars["imagens"].set("nudez" in padrao["detectores"])

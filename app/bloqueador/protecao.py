@@ -291,6 +291,13 @@ def mais_rigido(base, novo):
     # espera de desbloqueio só pode aumentar (esperar mais é mais rígido)
     cfg["espera_desbloqueio_min"] = max(base["espera_desbloqueio_min"],
                                         novo["espera_desbloqueio_min"])
+    # exceções: não dá para ADICIONAR janela ignorada no modo restrito (seria
+    # afrouxar); só mantém as que já existiam (tirar exceção é mais rígido).
+    cfg["excecoes"] = [e for e in novo["excecoes"] if e in base["excecoes"]]
+    # modo horário: não dá para desligar o agendamento no modo restrito
+    h = dict(novo["horario_restrito"])
+    h["ativo"] = base["horario_restrito"]["ativo"] or novo["horario_restrito"]["ativo"]
+    cfg["horario_restrito"] = h
     if "tela" in (base["modo"], novo["modo"]):
         cfg["modo"] = "tela"
     for chaves in config.LISTAS + (("navegadores",),):
@@ -354,6 +361,43 @@ def bloqueio_rapido():
     if novo != cfg:
         config.salvar(novo)
     return ate
+
+
+# ---------------- modo horário (Modo restrito automático) ----------------
+def _minutos_do_dia(hhmm):
+    h, m = str(hhmm).split(":")
+    return int(h) * 60 + int(m)
+
+
+def horario_restrito_agora(cfg, agora=None):
+    """Minutos que faltam até o fim da janela de horário, se o modo horário
+    está ligado e agora cai dentro dela; senão 0. Só usa o relógio (offline)."""
+    h = cfg.get("horario_restrito") or {}
+    if not h.get("ativo"):
+        return 0
+    try:
+        ini, fim = _minutos_do_dia(h["inicio"]), _minutos_do_dia(h["fim"])
+    except (ValueError, KeyError, AttributeError, TypeError):
+        return 0
+    if ini == fim:
+        return 0
+    t = time.localtime(agora if agora is not None else time.time())
+    agora_min = t.tm_hour * 60 + t.tm_min
+    dentro = ini <= agora_min < fim if ini < fim else (agora_min >= ini or agora_min < fim)
+    if not dentro:
+        return 0
+    return max(1, (fim - agora_min) % (24 * 60))  # atravessa a meia-noite se preciso
+
+
+def aplicar_horario(cfg=None):
+    """Liga o Modo restrito sozinho dentro da janela de horário configurada.
+    Idempotente e nunca encurta; não mexe no modo restrito sem prazo. Retorna
+    True se a janela está valendo agora."""
+    cfg = cfg or config_efetivo()
+    falta = horario_restrito_agora(cfg)
+    if falta and not restrito_indefinido():
+        ativar_restrito(falta)
+    return bool(falta)
 
 
 # ---------------- prévias das janelas (barra de tarefas e Alt+Tab) ----------------

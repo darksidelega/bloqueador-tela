@@ -14,6 +14,10 @@ def main():
         return
     restrito_antes = None
     while True:
+        try:
+            protecao.aplicar_horario()  # liga o Modo restrito na janela de horário
+        except Exception as e:
+            print("Erro no modo horário:", repr(e))
         restrito = protecao.vigiar_restrito()
         protecao.travar_arquivos(restrito)
         if restrito != restrito_antes:

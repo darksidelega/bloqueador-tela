@@ -134,6 +134,16 @@ PADRAO = {
         "opera_gx.exe", "vivaldi.exe", "arc.exe", "zen.exe", "librewolf.exe",
         "waterfox.exe", "iexplore.exe", "browser.exe", "chromium.exe", "thorium.exe"
     ],
+    # Exceções: apps/janelas em que o bloqueador NÃO cobre nada (nem imagem).
+    # Útil para transmissões de luta (UFC), jogos em tela cheia, etc. Casa por
+    # pedaço do título OU pelo nome do .exe da janela ativa. Vazio = sem exceção.
+    # Ex.: ["ea sports ufc", "eldenring.exe", "steam", "vlc.exe"]
+    "excecoes": [],
+    # Modo horário: liga o Modo restrito sozinho dentro desta janela de horas
+    # (ex.: de madrugada). 100% offline (usa o relógio do PC). Enquanto a janela
+    # dura, vale tudo do Modo restrito (não dá para desligar). inicio/fim em
+    # "HH:MM"; se fim < inicio, atravessa a meia-noite (ex.: 23:00 -> 06:00).
+    "horario_restrito": {"ativo": False, "inicio": "00:00", "fim": "06:00"},
     # Janelas onde título e OCR não bloqueiam (você editando listas/logs,
     # terminal, Claude). A detecção de imagens continua valendo nelas.
     "ignorar_janelas": [

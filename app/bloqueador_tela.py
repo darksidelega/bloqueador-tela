@@ -355,6 +355,14 @@ def eh_navegador(janela, cfg):
         or navegador_de_verdade(janela)
 
 
+def janela_excecao(janela, cfg):
+    """A janela é uma exceção escolhida pelo usuário (UFC, jogo...): enquanto
+    ela está na frente, o bloqueador não cobre nada. Casa por pedaço do título
+    ou pelo nome do .exe."""
+    termos = [e.lower() for e in cfg.get("excecoes", []) if e and e.strip()]
+    return any(t in janela.titulo or t in janela.processo for t in termos)
+
+
 def navegadores_visiveis(cfg, monitor):
     """Janelas de navegador visíveis neste monitor onde título/OCR valem.
     A lista de "ignorar" (terminal, editor...) não vale para navegador: senão
@@ -596,6 +604,18 @@ class Trabalhador:
 
         ativa = janela_ativa()
         titulo = ativa.titulo
+        if janela_excecao(ativa, cfg):
+            # app/janela na lista de exceções em primeiro plano: não cobre nada
+            estado.paginas_travadas.clear()
+            with estado.lock:
+                if estado.patches:
+                    estado.patches = []
+                    estado.versao += 1
+            self.achou = False
+            estado.ciclo_pronto = time.time()
+            self.escrever_status(False)
+            self.dormir(t0)
+            return
         if not eh_navegador(ativa, cfg):
             # o OCR só lê o navegador ativo: com outra janela na frente ele
             # não confere de novo, então a marcação da página continua valendo
@@ -784,6 +804,8 @@ def vigiar_ocr(monitor, estado, cfg):
             # só o navegador ativo: lendo um que está atrás, o OCR lia o texto
             # da janela que estava por cima dele
             ativa = janela_ativa()
+            if janela_excecao(ativa, cfg):
+                continue
             if not eh_navegador(ativa, cfg) or (not navegador_de_verdade(ativa) and any(
                     j in ativa.titulo for j in janelas_ignoradas(cfg))):
                 continue
@@ -1065,6 +1087,8 @@ def main():
         capas, agora = [], time.time()
         ox, oy = monitor["left"], monitor["top"]
         ativa = user32.GetForegroundWindow()
+        if janela_excecao(_janela(ativa), cfg):
+            return []  # app/janela em exceção na frente: nenhuma cobertura
         alternando = classe_janela(ativa) in CLASSES_ALTERNANCIA
         # rolando: a janela ativa inteira (menos as abas) até a IA olhar a
         # tela parada de novo
@@ -1134,7 +1158,11 @@ def main():
             if j is not None and j.winfo_exists():
                 j.lift()  # sempre por cima do mosaico
         avisos[:] = [j for j in avisos if j.winfo_exists()]
-        if tick[0] % 50 == 0:  # ~2 s: modo restrito e config
+        if tick[0] % 50 == 0:  # ~2 s: modo horário, modo restrito e config
+            try:
+                protecao.aplicar_horario()  # liga o Modo restrito na janela de horário
+            except Exception as e:
+                print("Erro no modo horário:", repr(e))
             restrito = protecao.vigiar_restrito()
             protecao.travar_arquivos(restrito)
             if restrito != restrito_antes[0]:
