@@ -777,6 +777,7 @@ class Painel(ctk.CTk):
             espera = max(1, int(espera))
             j.destroy()
             self._pos_ativar_restrito(protecao.ativar_restrito_livre(espera))
+            self.cfg = config.carregar()  # não deixa o cache velho (mostrava 30)
             self.avisar(f"🔒 Sem prazo. O desbloqueio vai levar {dur(espera)}.", ACENTO, 10)
 
         f = ctk.CTkFrame(j, fg_color="transparent")
@@ -811,7 +812,9 @@ class Painel(ctk.CTk):
         j.after(100, j.grab_set)
 
     def _desbloquear(self):
-        espera = self.cfg.get("espera_desbloqueio_min", 30)
+        # o valor REAL da espera (o que o pedir_desbloqueio vai usar), não o
+        # cache self.cfg que pode estar velho
+        espera = protecao.config_efetivo().get("espera_desbloqueio_min", 30)
 
         def confirmar(_):
             d = protecao.pedir_desbloqueio()
@@ -1102,7 +1105,7 @@ class Painel(ctk.CTk):
             else:
                 self.lb_restrito.configure(
                     text="Ativo sem prazo. Para sair, peça o desbloqueio e espere "
-                         f"{dur(self.cfg.get('espera_desbloqueio_min', 30))}.",
+                         f"{dur(protecao.config_efetivo().get('espera_desbloqueio_min', 30))}.",
                     text_color=ACENTO)
                 self.bt_restrito.configure(text="Desbloquear", command=self._desbloquear,
                                            fg_color=VERMELHO, hover_color=("#B91C1C", "#DC2626"))
