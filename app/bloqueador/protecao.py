@@ -154,10 +154,17 @@ def ativar_restrito(minutos):
     return ate
 
 
-def ativar_restrito_livre():
+def ativar_restrito_livre(espera_min=None):
     """Liga o modo restrito "sem prazo" (como o Strict do ScreenZen): não tem
-    hora para acabar; só sai com pedir_desbloqueio() + espera. Nunca encurta."""
-    if not restrito_ativo() or _ler_cfg_restrito() is None:
+    hora para acabar; só sai com pedir_desbloqueio() + espera. Nunca encurta.
+    `espera_min` (quando o modo ainda não estava ligado) define quanto o
+    desbloqueio vai demorar — o usuário escolhe: 30, mais, ou menos."""
+    novo = not restrito_ativo()
+    if espera_min is not None and novo:
+        cfg = config.carregar()
+        cfg["espera_desbloqueio_min"] = max(1, int(espera_min))
+        config.salvar(cfg)
+    if novo or _ler_cfg_restrito() is None:
         _guardar_cfg_restrito(config.carregar())
     cancelar_desbloqueio()  # começar sem prazo cancela qualquer pedido pendente
     _gravar_restrito(INDEFINIDO)
@@ -453,9 +460,8 @@ def _arquivos_protegidos():
         for raiz, _, nomes in os.walk(pasta):
             if "__pycache__" in raiz:
                 continue
-            for n in nomes:
-                if n.endswith((".py", ".onnx", ".ico", ".png", ".js", ".json")):
-                    yield os.path.join(raiz, n), False
+            for n in nomes:  # trava TODO arquivo: não dá para apagar nem um solto
+                yield os.path.join(raiz, n), False
     yield ARQ_CHAVE, False
     yield ARQ_RESTRITO, True  # o Painel precisa poder regravar (estender)
     yield ARQ_DESBLOQUEIO, True  # o Painel pede/cancela o desbloqueio

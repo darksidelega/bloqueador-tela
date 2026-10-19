@@ -189,10 +189,10 @@ INFO = {
          "não dá para pausar, desligar proteções, baixar a sensibilidade, editar a lista "
          "de sites nem desligar o app, nem pelo painel nem pelo atalho de teclado."),
         ("Sem prazo",
-         "Não tem hora para acabar. Para sair você toca em \"Desbloquear\" e espera um "
-         "tempo (30 min de padrão, ajustável no config.json) com tudo ainda travado — dá "
-         "tempo de a vontade passar. Pode cancelar a espera a qualquer momento. É o jeito "
-         "mais firme, como o modo estrito do ScreenZen."),
+         "Não tem hora para acabar. Ao ligar, você escolhe quanto o desbloqueio vai "
+         "demorar (5 min, 2 horas, ou o que quiser). Para sair, toca em \"Desbloquear\" e "
+         "espera esse tempo com tudo ainda travado — dá tempo de a vontade passar. Pode "
+         "cancelar a espera a qualquer momento. É o jeito mais firme, como o ScreenZen."),
         ("O que ainda dá",
          "Deixar mais rígido: ligar proteções, aumentar a sensibilidade, estender o tempo "
          "ou aumentar a espera de desbloqueio."),
@@ -716,21 +716,22 @@ class Painel(ctk.CTk):
 
     def restrito(self):
         ativo = protecao.restrito_ativo()
-        espera = self.cfg.get("espera_desbloqueio_min", 30)
         opcoes = [("1 hora", 60), ("4 horas", 240), ("1 dia", 1440),
                   ("1 semana", 10080), ("Sem prazo", "livre")]
         texto = ("Enquanto durar, não dá para pausar, desligar proteções, diminuir\n"
-                 "a sensibilidade nem fechar o app.\n"
-                 f"\"Sem prazo\" não tem hora para acabar: para sair você pede o\n"
-                 f"desbloqueio e espera {espera} min (dá tempo de a vontade passar).")
+                 "a sensibilidade, apagar nem fechar o app.\n"
+                 "\"Sem prazo\" não tem hora para acabar: para sair você pede o\n"
+                 "desbloqueio e espera um tempo que você escolhe agora.")
         self._escolher("Estender modo restrito" if ativo else "Ativar modo restrito",
                        texto, opcoes, self._ativar_restrito, perigo=True)
 
     def _ativar_restrito(self, minutos):
         if minutos == "livre":
-            ate = protecao.ativar_restrito_livre()
-        else:
-            ate = protecao.ativar_restrito(minutos)
+            self._ativar_livre()  # abre o seletor do tempo de desbloqueio
+            return
+        self._pos_ativar_restrito(protecao.ativar_restrito(minutos))
+
+    def _pos_ativar_restrito(self, ate):
         # garante que está tudo ligado e voltando sozinho
         if not protecao.esta_rodando("app"):
             protecao.iniciar_app()
@@ -739,11 +740,61 @@ class Painel(ctk.CTk):
             self.vars["autostart"].set(True)
         if not protecao.esta_rodando("guardiao"):
             protecao.iniciar_guardiao()
-        if ate >= protecao.INDEFINIDO:
-            self.avisar("🔒 Modo restrito sem prazo. Para sair, peça o desbloqueio.", ACENTO)
-        else:
+        if ate < protecao.INDEFINIDO:
             self.avisar("🔒 Modo restrito até " + time.strftime("%d/%m %H:%M", time.localtime(ate)),
                         ACENTO)
+
+    def _ativar_livre(self):
+        if self.popup and self.popup.winfo_exists():
+            self.popup.focus()
+            return
+        j = self.popup = ctk.CTkToplevel(self, fg_color=CARTAO)
+        j.title("Modo restrito sem prazo")
+        j.resizable(False, False)
+        j.transient(self)
+        por_icone(j)
+        ctk.CTkLabel(j, text="Modo restrito sem prazo", font=fonte(17, "bold")).pack(
+            anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(j, text="Não tem hora para acabar. Para sair, você vai tocar em\n"
+                     "\"Desbloquear\" e esperar o tempo que escolher agora, com tudo\n"
+                     "ainda travado. Quanto quer esperar?",
+                     font=fonte(12), text_color=TEXTO2, justify="left").pack(anchor="w", padx=20)
+
+        def ativar(espera):
+            espera = max(1, int(espera))
+            j.destroy()
+            self._pos_ativar_restrito(protecao.ativar_restrito_livre(espera))
+            self.avisar(f"🔒 Sem prazo. O desbloqueio vai levar {espera} min.", ACENTO, 10)
+
+        f = ctk.CTkFrame(j, fg_color="transparent")
+        f.pack(padx=16, pady=(12, 4))
+        presets = [("5 min", 5), ("15 min", 15), ("30 min", 30), ("1 hora", 60), ("2 horas", 120)]
+        for i, (txt, v) in enumerate(presets):
+            ctk.CTkButton(f, text=txt, width=96, height=36, corner_radius=10, fg_color=VERMELHO,
+                          hover_color=("#B91C1C", "#DC2626"), font=fonte(12, "bold"),
+                          command=lambda v=v: ativar(v)).grid(row=i // 3, column=i % 3, padx=4, pady=4)
+        g = ctk.CTkFrame(j, fg_color="transparent")
+        g.pack(padx=16, pady=(2, 8))
+        ctk.CTkLabel(g, text="Outro:", font=fonte(12)).pack(side="left", padx=(0, 6))
+        ent = ctk.CTkEntry(g, width=66, height=32, justify="center", font=fonte(12))
+        ent.pack(side="left")
+        ctk.CTkLabel(g, text="min", font=fonte(12), text_color=TEXTO2).pack(side="left", padx=4)
+
+        def ativar_custom():
+            t = ent.get().strip()
+            if t.isdigit() and int(t) >= 1:
+                ativar(int(t))
+            else:
+                self.avisar("Digite um número de minutos (1 ou mais).", VERMELHO, 6)
+
+        ent.bind("<Return>", lambda _e: ativar_custom())
+        ctk.CTkButton(g, text="Ativar", width=80, height=32, fg_color=ACENTO,
+                      hover_color=ACENTO_HOVER, font=fonte(12, "bold"),
+                      command=ativar_custom).pack(side="left", padx=6)
+        ctk.CTkButton(j, text="Cancelar", fg_color="transparent", text_color=TEXTO2,
+                      hover_color=BORDA, command=j.destroy).pack(pady=(0, 14))
+        centralizar(j, self)
+        j.after(100, j.grab_set)
 
     def _desbloquear(self):
         espera = self.cfg.get("espera_desbloqueio_min", 30)
