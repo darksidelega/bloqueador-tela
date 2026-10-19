@@ -67,6 +67,19 @@ def hora_valida(s):
     return bool(re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", (s or "").strip()))
 
 
+def dur(minutos):
+    """Minutos -> texto curto: '30 min', '2 h', '1 dia'."""
+    m = int(minutos)
+    if m < 60:
+        return f"{m} min"
+    if m % 1440 == 0:
+        d = m // 1440
+        return f"{d} dia" + ("s" if d > 1 else "")
+    if m % 60 == 0:
+        return f"{m // 60} h"
+    return f"{m // 60} h {m % 60} min"
+
+
 def falta(ate):
     s = int(ate - time.time())
     d, s = divmod(s, 86400)
@@ -764,11 +777,12 @@ class Painel(ctk.CTk):
             espera = max(1, int(espera))
             j.destroy()
             self._pos_ativar_restrito(protecao.ativar_restrito_livre(espera))
-            self.avisar(f"🔒 Sem prazo. O desbloqueio vai levar {espera} min.", ACENTO, 10)
+            self.avisar(f"🔒 Sem prazo. O desbloqueio vai levar {dur(espera)}.", ACENTO, 10)
 
         f = ctk.CTkFrame(j, fg_color="transparent")
         f.pack(padx=16, pady=(12, 4))
-        presets = [("5 min", 5), ("15 min", 15), ("30 min", 30), ("1 hora", 60), ("2 horas", 120)]
+        presets = [("10 min", 10), ("30 min", 30), ("1 hora", 60), ("2 horas", 120),
+                   ("4 horas", 240), ("8 horas", 480), ("12 horas", 720), ("1 dia", 1440)]
         for i, (txt, v) in enumerate(presets):
             ctk.CTkButton(f, text=txt, width=96, height=36, corner_radius=10, fg_color=VERMELHO,
                           hover_color=("#B91C1C", "#DC2626"), font=fonte(12, "bold"),
@@ -808,9 +822,9 @@ class Painel(ctk.CTk):
 
         self._escolher(
             "Desbloquear o modo restrito",
-            f"O modo restrito vai se desligar daqui a {espera} minutos.\n"
+            f"O modo restrito vai se desligar daqui a {dur(espera)}.\n"
             "Até lá continua tudo travado. Dá para cancelar quando quiser.",
-            [(f"Esperar {espera} min", "ok")], confirmar, perigo=True)
+            [(f"Esperar {dur(espera)}", "ok")], confirmar, perigo=True)
 
     def _cancelar_desbloqueio(self):
         protecao.cancelar_desbloqueio()
@@ -1088,7 +1102,7 @@ class Painel(ctk.CTk):
             else:
                 self.lb_restrito.configure(
                     text="Ativo sem prazo. Para sair, peça o desbloqueio e espere "
-                         f"{self.cfg.get('espera_desbloqueio_min', 30)} min.",
+                         f"{dur(self.cfg.get('espera_desbloqueio_min', 30))}.",
                     text_color=ACENTO)
                 self.bt_restrito.configure(text="Desbloquear", command=self._desbloquear,
                                            fg_color=VERMELHO, hover_color=("#B91C1C", "#DC2626"))

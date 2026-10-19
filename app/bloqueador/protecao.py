@@ -71,27 +71,47 @@ def _registro(valor=None):
         return None
 
 
-def _restrito_gravado():
-    """(do arquivo, do registro): horários válidos gravados (0 = nada/inválido)."""
-    reg, do_reg = _registro(), 0
+def _ler_assinado(arq, tipo):
+    """Epoch assinado válido do arquivo (inclui 0 = desligado de propósito), ou
+    None se o arquivo não existe ou foi adulterado."""
+    try:
+        with open(arq, encoding="utf-8") as f:
+            d = json.load(f)
+        if hmac.compare_digest(d["assinatura"], _assinatura(tipo, d["ate"])):
+            return d["ate"]
+    except Exception:
+        pass
+    return None
+
+
+def _registro_assinado():
+    """Epoch assinado válido do registro (inclui 0), ou None se ausente/adulterado."""
+    reg = _registro()
     if reg:
         try:
             if hmac.compare_digest(reg["assinatura"], _assinatura("restrito", reg["ate"])):
-                do_reg = reg["ate"]
+                return reg["ate"]
         except Exception:
             pass
-    return _ler(ARQ_RESTRITO, "restrito"), do_reg
+    return None
 
 
-# o app e o guardião lembram o horário: apagar o arquivo e a chave do registro
-# não desliga o restrito enquanto um dos dois estiver rodando
+# o app e o guardião lembram o horário na memória: apagar o arquivo e a chave do
+# registro não desliga o restrito enquanto um dos dois estiver rodando. MAS um
+# registro ASSINADO (só o nosso código, com a chave, escreve) manda sobre a
+# memória: assim "desligar" (gravar 0 assinado) é respeitado pelos dois
+# processos. Antes, apagar os registros fazia o outro processo — que ainda
+# lembrava INDEFINIDO — religar o modo restrito na hora (o timer "reiniciava").
 _restrito_memoria = 0
 
 
 def _restrito_bruto():
-    """Horário-fim gravado (arquivo/registro/memória), sem olhar o relógio nem
-    o pedido de desbloqueio. INDEFINIDO = modo sem prazo."""
-    return max(_restrito_memoria, *_restrito_gravado())
+    """Horário-fim do modo restrito (epoch), sem olhar o relógio nem o pedido de
+    desbloqueio. INDEFINIDO = sem prazo; 0 = desligado. Registros assinados
+    mandam; se tudo foi apagado/adulterado, cai na memória (anti-tamper)."""
+    validos = [v for v in (_ler_assinado(ARQ_RESTRITO, "restrito"), _registro_assinado())
+               if v is not None]
+    return max(validos) if validos else _restrito_memoria
 
 
 def restrito_ate():
@@ -130,15 +150,23 @@ def _gravar_restrito(ate):
     _registro({"ate": ate, "assinatura": _assinatura("restrito", ate)})
 
 
-def _apagar_restrito():
-    """Desliga o modo restrito de vez: apaga os registros e o pedido de
-    desbloqueio."""
-    for arq in (ARQ_RESTRITO, ARQ_DESBLOQUEIO):
+def _desligar_restrito():
+    """Desliga o modo restrito de forma assinada e durável (grava 0 assinado no
+    arquivo e no registro), para o app e o guardião concordarem que acabou — sem
+    um religar o que o outro desligou. Remove o pedido de desbloqueio. Não
+    reescreve se já estava 0 (evita churn)."""
+    global _restrito_memoria
+    _restrito_memoria = 0
+    if _ler_assinado(ARQ_RESTRITO, "restrito") != 0 or _registro_assinado() != 0:
         try:
-            os.remove(arq)
+            _gravar_restrito(0)
         except OSError:
             pass
-    _registro({"ate": 0, "assinatura": _assinatura("restrito", 0)})
+    if os.path.isfile(ARQ_DESBLOQUEIO):
+        try:
+            os.remove(ARQ_DESBLOQUEIO)
+        except OSError:
+            pass
 
 
 def ativar_restrito(minutos):
@@ -210,20 +238,23 @@ def vigiar_restrito():
     de pé contra quem apaga os arquivos ou adianta o relógio. Retorna se
     está ativo."""
     global _restrito_memoria, _relogio
-    do_arq, do_reg = _restrito_gravado()
-    ate = max(_restrito_memoria, do_arq, do_reg)
+    ate = _restrito_bruto()
     agora, ligado = time.time(), _ms_ligado() / 1000
     sem_prazo = ate >= INDEFINIDO
     d = _ler(ARQ_DESBLOQUEIO, "desbloqueio") if sem_prazo else 0
     if _relogio and ate:
         # o relógio andou bem mais que o tempo de verdade: adiantaram a hora.
-        # Estende o prazo (ou empurra a espera de desbloqueio) na mesma medida,
-        # senão dava para pular o tempo só mudando o relógio.
+        # Estende o prazo (ou empurra a espera de desbloqueio em andamento) na
+        # mesma medida, senão dava para pular o tempo só mudando o relógio.
         pulo = (agora - _relogio[0]) - (ligado - _relogio[1])
         if pulo > 120:
-            if not sem_prazo:
+            if 0 < ate < INDEFINIDO:
                 ate += int(pulo)
-            if d:
+                try:
+                    _gravar_restrito(ate)
+                except OSError:
+                    pass
+            if d and d > agora:
                 d += int(pulo)
                 try:
                     _gravar(ARQ_DESBLOQUEIO, "desbloqueio", d)
@@ -231,18 +262,18 @@ def vigiar_restrito():
                     pass
             print(f"Relógio adiantado {pulo / 3600:.1f} h: o modo restrito foi estendido igual.")
     _relogio = (agora, ligado)
-    # desliga: prazo acabou, ou a espera de desbloqueio foi cumprida
+    # desliga: prazo acabou, ou a espera de desbloqueio foi cumprida. Grava o
+    # "desligado" assinado (não apaga): assim o outro processo não religa.
     if ate <= agora or (sem_prazo and d and d <= agora):
-        _restrito_memoria = 0
-        _apagar_restrito()
+        _desligar_restrito()
         vigia(False)
         return False
     _restrito_memoria = ate
     vigia(True)
     alvo = INDEFINIDO if sem_prazo else ate
-    if do_arq != alvo or do_reg != alvo:
+    if _ler_assinado(ARQ_RESTRITO, "restrito") != alvo or _registro_assinado() != alvo:
         try:
-            _gravar_restrito(alvo)  # alguém apagou ou mexeu: regrava
+            _gravar_restrito(alvo)  # alguém apagou/mexeu (ou acabou de ativar): regrava
         except OSError:
             pass
     garantir_autostart()

@@ -19,3 +19,5 @@ config_restrito.json
 extensao_chave.pem
 host_curtos.json
 host_curtos.bat
+debug.log
+recuperar_restrito.py
