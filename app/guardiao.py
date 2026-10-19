@@ -1,5 +1,5 @@
 """Guardião: mantém o bloqueador rodando e o reinicia se for fechado
-(a não ser que tenha sido pausado com a senha). Iniciado com o Windows."""
+(a não ser que tenha sido pausado pelo próprio app). Iniciado com o Windows."""
 import os
 import time
 
