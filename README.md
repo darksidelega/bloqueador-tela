@@ -109,3 +109,8 @@ sozinhas (como no Fotos) e em grade (como no Google Imagens).
 
 ## Gore (futuro)
 Veja `app/bloqueador/detectores/gore.py`: é só plugar um classificador ONNX.
+
+## Licença
+Freeware sob a licença MIT — veja o arquivo `LICENSE`. Os modelos de IA
+são baixados das fontes originais pelo `Instalar.bat`, cada um sob a sua
+própria licença.
